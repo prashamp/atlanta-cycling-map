@@ -37,33 +37,58 @@ recommended defaults were used:
    trails and destinations; the "Commuter" preset switches on MARTA stations,
    the safety layer, and hides sharrows/food in favor of directness.
 
-## ⚠️ About the data
+## Loading real data (official sources)
 
-- **Route geometries are simplified approximations** of real Atlanta facilities
-  (BeltLine trails, PATH400, 10th St cycle track, etc.) — good enough for
-  orientation, not navigation.
-- **All safety figures are illustrative sample data** shaped to match published
-  reporting patterns (e.g., Moreland Ave and DeKalb Ave consistently top
-  Atlanta's high-injury network). They are **not official statistics**.
+The map ships with embedded **sample data** so it works out of the box. To
+replace it with the real thing, run the bundled pipeline on any machine with
+Node 18+ and open internet:
+
+```bash
+# 1. Official bike infrastructure + neighborhood boundaries (no account needed)
+node scripts/fetch-data.mjs
+
+# 2. Real crash data — download a CSV export first (see below), then:
+node scripts/fetch-data.mjs --gdot-csv ~/Downloads/atlanta-bike-crashes.csv
+
+# 3. Commit the generated files and push — the live site updates automatically
+git add data/ && git commit -m "Load official data" && git push
+```
+
+The script writes `data/infrastructure.js`, `data/neighborhoods.js`, and
+`data/safety.js`. `index.html` auto-detects them and switches off the samples
+(the sidebar disclaimer flips from ⚠️ *sample data* to ✅ *official data*).
+Delete the files to fall back to samples. Run `node scripts/fetch-data.mjs
+--selftest` to check the transform logic offline, `--help` for all options.
+
+### Where the data comes from
+
+| Layer | Source | Access |
+|---|---|---|
+| Bike infrastructure | City of Atlanta DPCD GIS — [Bicycle Routes layer](https://gis.atlantaga.gov/dpcd/rest/services/OpenDataService/FeatureServer/30) (true road geometries with facility type: protected / buffered / lane / path / sharrow) | automatic |
+| Neighborhoods | City of Atlanta DPCD GIS — [official Neighborhood boundaries](https://gis.atlantaga.gov/dpcd/rest/services/AdministrativeArea/GeopoliticalArea/MapServer/1) (~240 polygons; labels appear from zoom 13) | automatic |
+| Crashes (best) | [GDOT Crash Data Portal](https://gdot.numetric.net/) — free account required. Filter: *bicyclist or e-scooter involved*, *City of Atlanta*, your year range → export CSV → `--gdot-csv`. Column names are auto-detected; override with `--map "lat=...,lng=...,year=...,mode=...,severity=...,street=..."`. If your export is pre-filtered to bikes and has no person-type column, add `--assume-bike`. | manual export |
+| Crashes (supplement) | [NHTSA FARS CrashAPI](https://crashviewer.nhtsa.dot.gov/CrashAPI) via `--fars` — **fatalities only**, public API, no account. Useful preview; not a substitute for the GDOT export. | automatic |
+
+Atlanta Police Department crash records are not published as a machine-readable
+open dataset; GDOT's portal is the canonical source for all-severity crash data
+(APD reports feed into it).
+
+## ⚠️ About the built-in sample data
+
+- Sample **route geometries are simplified approximations** of real facilities —
+  good for orientation, not navigation. The pipeline replaces them with the
+  city's full official network.
+- Sample **safety figures are illustrative**, shaped to match published
+  reporting patterns (Moreland Ave and DeKalb Ave really do top Atlanta's
+  high-injury network) — **not official statistics**.
 - **Relay Bike Share ceased operations in 2020.** The map keeps one marker at a
   former downtown hub as a note; dockless e-bikes/scooters (Lime, Bird) are the
   current shared options.
 
-### Swapping in real data
-
-All data lives in plain JS arrays at the top of the `<script>` block in
-`index.html`:
-
-| Array | What to replace it with |
-|---|---|
-| `ROUTES` | City of Atlanta bicycle-facility GIS layer (Atlanta DOT / [Atlanta Regional Commission Open Data](https://opendata.atlantaregional.com/) — export as GeoJSON, map each feature's coordinates into `coords` as `[lat, lng]` pairs) |
-| `NEIGHBORHOODS` | City of Atlanta official *Neighborhoods* boundary layer (same portals) |
-| `CRASHES`, `CORRIDORS`, `STATS` | GDOT crash data via the [GDOT Crash Data Portal](https://gdot.numetric.net/) or Atlanta Police Department open records — filter to bicycle / e-scooter involved, 2021–2025, and aggregate by intersection and corridor |
-| `POIS.marta` | MARTA GTFS stops feed |
-
-Each route object also carries `surface`, `hills`, `lighting`, `marta`, and a
-`closures` placeholder field intended for manual updates as construction comes
-and goes.
+Each route also carries `surface`, `hills`, `lighting`, and a `closures`
+placeholder meant for manual updates as construction comes and goes; the city
+layer doesn't publish those attributes, so popups show honest "unknown"
+defaults until filled in.
 
 ## Stack
 
