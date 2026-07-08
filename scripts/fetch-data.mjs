@@ -84,7 +84,7 @@ export function classifyFacility(raw) {
   if (!raw) return null;
   const t = String(raw).toLowerCase();
   if (/multi[\s-]?use|shared[\s-]?use|side\s?path|\bpath\b|\btrail\b|greenway|beltline|off[\s-]?(street|road)/.test(t)) return 'trail';
-  if (/protect|cycle\s?track|separat/.test(t)) return 'protected';
+  if (/protect|cycle\s?track|separat|raised\s+bike\s+lane/.test(t)) return 'protected';
   if (/buffer/.test(t)) return 'buffered';
   if (/sharrow|shared[\s-]?(lane|roadway|street)|bike\s?(blvd|boulevard)|neighborhood\s?(greenway|street)|signed/.test(t)) return 'sharrow';
   if (/\blane\b/.test(t)) return 'standard';
@@ -515,6 +515,10 @@ function selftest() {
   eq('classify path', classifyFacility('Multi-Use Path'), 'trail');
   eq('classify shared-use', classifyFacility('Shared Use Path'), 'trail');
   eq('classify sidepath', classifyFacility('Side Path'), 'trail');
+  eq('classify raised', classifyFacility('Raised Bike Lane'), 'protected');
+  eq('classify contraflow buffered', classifyFacility('Buffered Contraflow Bike Lane'), 'buffered');
+  eq('classify multiuse-hard', classifyFacility('Hard Surface Multi-Use Path'), 'trail');
+  eq('classify bike-blvd', classifyFacility('Bike Boulevard'), 'sharrow');
   eq('classify unknown', classifyFacility('Widget'), null);
   eq('surface trail', inferSurface('trail'), 'Paved (some interim unpaved segments possible)');
   eq('surface lane', inferSurface('standard'), 'Paved (asphalt)');
