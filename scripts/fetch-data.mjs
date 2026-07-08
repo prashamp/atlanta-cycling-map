@@ -52,8 +52,8 @@ const SOURCES = {
     'https://gis.atlantaga.gov/dpcd/rest/services/OpenDataService1/MapServer',
     'https://gis.atlantaga.gov/dpcd/rest/services/Transportation/MapServer'
   ],
-  bikeNameRe: /bicycle|bike\s*(lane|route|facilit|network)/i,
-  bikeExcludeRe: /parking|rack|share|shop|station|repair|count/i,
+  bikeNameRe: /bicycle|bike|cycl/i,
+  bikeExcludeRe: /parking|rack|share|shop|station|repair|count|signal|\bped/i,
   neighborhoods:
     'https://gis.atlantaga.gov/dpcd/rest/services/AdministrativeArea/GeopoliticalArea/MapServer/1/query',
   fars: 'https://crashviewer.nhtsa.dot.gov/CrashAPI'
@@ -92,8 +92,8 @@ export function classifyFacility(raw) {
   return null;
 }
 
-export function pickField(sampleProps, regexes) {
-  const keys = Object.keys(sampleProps || {});
+export function pickField(sampleProps, regexes, excludeRe) {
+  const keys = Object.keys(sampleProps || {}).filter(k => !(excludeRe && excludeRe.test(k)));
   for (const re of regexes) {
     const hit = keys.find(k => re.test(k));
     if (hit) return hit;
@@ -299,23 +299,42 @@ async function getJSON(url) {
   return res.json();
 }
 
-// Scan ArcGIS service catalogs for a layer whose name matches nameRe (and does
-// not match excludeRe). Returns a ready-to-query URL, or null if none found.
+async function layerGeometryType(svc, id) {
+  try { return (await getJSON(`${svc}/${id}?f=json`)).geometryType || null; } catch { return null; }
+}
+async function layerCount(svc, id) {
+  try {
+    const c = await getJSON(`${svc}/${id}/query?where=1%3D1&returnCountOnly=true&f=json`);
+    return c.count ?? (c.properties && c.properties.count) ?? 0;
+  } catch { return 0; }
+}
+
+// Scan ArcGIS service catalogs for the best bike-facility layer: among layers
+// whose name matches nameRe (minus excludeRe), prefer POLYLINE geometry, then
+// the most features. Logs every layer + candidate so the right one is auditable.
 async function discoverLayer(catalogs, nameRe, excludeRe) {
+  const candidates = [];
   for (const svc of catalogs) {
+    const tag = svc.split('/services/')[1] || svc;
     let dir;
     try { dir = await getJSON(`${svc}?f=json`); }
-    catch (e) { console.log(`  catalog ${svc} → ${e.message}`); continue; }
-    const layers = [...(dir.layers || []), ...(dir.tables || [])];
-    const match = layers.find(l => l.name && nameRe.test(l.name) && !(excludeRe && excludeRe.test(l.name)));
-    if (match) {
-      console.log(`  discovered "${match.name}" (id ${match.id}) in ${svc}`);
-      return `${svc}/${match.id}/query`;
+    catch (e) { console.log(`  catalog ${tag} → ${e.message}`); continue; }
+    const layers = (dir.layers || []).filter(l => l && typeof l.id === 'number');
+    if (!layers.length) { console.log(`  ${tag}: no layers listed`); continue; }
+    console.log(`  ${tag}: ${layers.map(l => `${l.id}:${l.name}`).join(' | ')}`);
+    for (const l of layers) {
+      if (!l.name || !nameRe.test(l.name) || (excludeRe && excludeRe.test(l.name))) continue;
+      const gt = await layerGeometryType(svc, l.id);
+      const count = await layerCount(svc, l.id);
+      candidates.push({ svc, id: l.id, name: l.name, gt, count });
+      console.log(`    candidate ${l.id}:${l.name} geom=${gt} count=${count}`);
     }
-    if (layers.length)
-      console.log(`  no bike layer in ${svc.split('/services/')[1]} — saw: ${layers.map(l => l.name).slice(0, 12).join(', ')}`);
   }
-  return null;
+  if (!candidates.length) return null;
+  const poly = candidates.filter(c => /Polyline/i.test(c.gt || ''));
+  const pick = (poly.length ? poly : candidates).sort((a, b) => b.count - a.count)[0];
+  console.log(`  → chose ${pick.id}:${pick.name} (${pick.gt}, ${pick.count} features)`);
+  return `${pick.svc}/${pick.id}/query`;
 }
 
 async function fetchArcGISAll(baseUrl) {
@@ -361,8 +380,14 @@ async function pipelineInfrastructure(outDir, infraUrlOverride) {
   const feats = await fetchArcGISAll(queryUrl);
   if (!feats.length) throw new Error('layer returned no features');
   const props0 = feats.find(f => f.properties)?.properties || {};
-  const typeField = pickField(props0, [/facilit/i, /bike.*type|type.*bike/i, /^type$/i, /class/i]);
-  const nameField = pickField(props0, [/^name$/i, /street/i, /route.*name|name.*route/i, /label/i]);
+  const NO_ID = /(^|_)(object)?id$|^fid$/i;   // never pick OBJECTID / FACILITYID / *_ID as a value field
+  const typeField = pickField(props0,
+    [/fac.*type|type.*fac/i, /bike.*type|type.*bike/i, /lane.*type|type.*lane/i, /^type$/i, /class$/i, /category/i, /^facility$/i, /status/i],
+    NO_ID);
+  const nameField = pickField(props0,
+    [/st_?name|street.*name|name.*street/i, /road.*name|name.*road/i, /^street$/i, /^road$/i, /route.*name/i, /^name$/i, /corridor/i, /label/i],
+    NO_ID);
+  console.log(`  fields available: ${Object.keys(props0).join(', ')}`);
   console.log(`  detected fields → type: ${typeField ?? '(none)'} · name: ${nameField ?? '(none)'}`);
 
   const seenTypes = new Map();
@@ -383,6 +408,9 @@ async function pipelineInfrastructure(outDir, infraUrlOverride) {
       });
     }
   }
+  if (!routes.length) throw new Error(
+    `layer produced 0 line features (likely a point layer or wrong field) — ` +
+    `pass --infra-url to target the correct polyline layer`);
   console.log('  facility-type values seen:');
   for (const [v, n] of [...seenTypes].sort((a, b) => b[1] - a[1]))
     console.log(`    ${String(v)} × ${n} → ${classifyFacility(v) || 'standard (unmapped!)'}`);
