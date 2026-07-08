@@ -83,6 +83,7 @@
     border: 1px solid var(--gridline); border-radius: 8px; padding: 8px 10px; margin-top: 12px; line-height: 1.45;
   }
   .divider { border: 0; border-top: 1px solid var(--gridline); margin: 12px 0; }
+  #dataStamp { font-size: 10.5px; color: var(--text-muted); margin-top: 8px; text-align: center; }
 
   /* ---------- Map ---------- */
   #map { flex: 1; height: 100%; }
@@ -222,6 +223,7 @@
   </div>
 
   <div class="disclaimer" id="dataDisclaimer"></div>
+  <div id="dataStamp"></div>
 </aside>
 
 <div id="map">
@@ -786,6 +788,16 @@ map.on('click', () => document.getElementById('sidebar').classList.remove('open'
   } else {
     dj.innerHTML = `⚠️ Routes and safety figures are <b>illustrative sample data</b> — not official statistics. ` +
       `Run <b>node scripts/fetch-data.mjs</b> to load the City of Atlanta GIS layers and real crash data (see README).`;
+  }
+
+  // "Data updated" stamp — reads meta.fetchedAt written by the pipeline.
+  const stamp = document.getElementById('dataStamp');
+  const fetched = D.meta && D.meta.fetchedAt;
+  if (REAL_INFRA && fetched) {
+    const d = new Date(fetched);
+    stamp.textContent = `Data updated ${d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })}`;
+  } else {
+    stamp.textContent = 'Sample data · not yet updated from official sources';
   }
 })();
 

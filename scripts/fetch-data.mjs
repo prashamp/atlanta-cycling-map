@@ -68,6 +68,11 @@ const MARTA = [
 
 /* ================= pure transforms (unit-tested by --selftest) ========= */
 
+// City-mapped facilities are paved; trails may include interim unpaved segments.
+export function inferSurface(type) {
+  return type === 'trail' ? 'Paved (some interim unpaved segments possible)' : 'Paved (asphalt)';
+}
+
 export function classifyFacility(raw) {
   if (!raw) return null;
   const t = String(raw).toLowerCase();
@@ -340,6 +345,7 @@ async function pipelineInfrastructure(outDir) {
       routes.push({
         name: (nameField && p[nameField]) ? titleCase(p[nameField]) : (rawType ? String(rawType) : 'Bike facility'),
         type, coords,
+        surface: inferSurface(type),
         marta: nearestMarta(coords),
         closures: '—'
       });
@@ -450,6 +456,8 @@ function selftest() {
   eq('classify shared-use', classifyFacility('Shared Use Path'), 'trail');
   eq('classify sidepath', classifyFacility('Side Path'), 'trail');
   eq('classify unknown', classifyFacility('Widget'), null);
+  eq('surface trail', inferSurface('trail'), 'Paved (some interim unpaved segments possible)');
+  eq('surface lane', inferSurface('standard'), 'Paved (asphalt)');
 
   eq('csv quotes', parseCSV('a,b\n"x, y",2\n'), [{ a: 'x, y', b: '2' }]);
   eq('csv crlf', parseCSV('a,b\r\n1,2\r\n'), [{ a: '1', b: '2' }]);

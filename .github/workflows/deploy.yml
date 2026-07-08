@@ -1,0 +1,81 @@
+name: Build data & deploy to Pages
+
+# What this does, with zero effort from viewers OR the maintainer:
+#   1. Runs scripts/fetch-data.mjs ON GITHUB'S RUNNER (open internet), pulling
+#      the official City of Atlanta GIS bike-infrastructure and neighborhood
+#      layers.  (This sidesteps any local network restrictions.)
+#   2. Optionally pulls NHTSA FARS fatal-crash data if you trigger it manually
+#      with fars=true.  A committed data/safety.js (e.g. from a GDOT CSV export)
+#      is always left untouched and takes precedence.
+#   3. Publishes the whole site to GitHub Pages.  Runs on every push to main,
+#      once a month to refresh the data, and on demand.
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '17 6 1 * *'   # 06:17 UTC on the 1st of each month
+  workflow_dispatch:
+    inputs:
+      fars:
+        description: 'Also fetch NHTSA FARS fatal-crash data (fatalities only)'
+        type: boolean
+        default: false
+
+# Least-privilege token scoped for Pages deployment.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deploy at a time; don't cancel an in-flight production deploy.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build-deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Fetch official infrastructure + neighborhood data
+        run: node scripts/fetch-data.mjs
+
+      - name: (optional) Fetch FARS fatal-crash data
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.fars }}
+        run: |
+          if [ -f data/safety.js ]; then
+            echo "data/safety.js already committed — leaving it as-is."
+          else
+            node scripts/fetch-data.mjs --skip-infra --skip-neighborhoods --fars
+          fi
+
+      - name: Assemble site
+        run: |
+          mkdir -p _site
+          cp index.html _site/
+          cp -r vendor _site/
+          cp -r data _site/
+          touch _site/.nojekyll   # serve files as-is, no Jekyll processing
+
+      - name: Configure Pages (auto-enables it on first run)
+        uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
+      - name: Upload site artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
