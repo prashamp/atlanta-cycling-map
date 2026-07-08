@@ -1,0 +1,805 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Atlanta Cycling Map</title>
+<link rel="stylesheet" href="vendor/leaflet/leaflet.css">
+<style>
+  :root {
+    /* Infrastructure palette (per spec) */
+    --lane-protected: #1a9850;
+    --lane-buffered:  #2a78d6;
+    --lane-standard:  #e8730c;
+    --lane-trail:     #7b3fbf;
+    --lane-sharrow:   #8a8f98;
+    /* Risk / status (reserved, never reused for series) */
+    --risk-low:      #fab219;
+    --risk-med:      #ec835a;
+    --risk-high:     #d03b3b;
+    /* Chart chrome & ink */
+    --surface-1:      #fcfcfb;
+    --text-primary:   #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted:     #898781;
+    --gridline:       #e1e0d9;
+    --baseline:       #c3c2b7;
+    --series-1:       #2a78d6;
+    --ring:           rgba(11,11,11,0.10);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body { display: flex; overflow: hidden; color: var(--text-primary); }
+
+  /* ---------- Sidebar ---------- */
+  #sidebar {
+    width: 320px; min-width: 320px; height: 100%;
+    background: var(--surface-1); border-right: 1px solid var(--gridline);
+    overflow-y: auto; padding: 14px 16px 24px; z-index: 1100;
+  }
+  #sidebar h1 { font-size: 17px; margin: 0 0 2px; letter-spacing: -0.01em; }
+  #sidebar .subtitle { font-size: 12px; color: var(--text-muted); margin: 0 0 12px; }
+  .section { margin-bottom: 14px; }
+  .section > h2 {
+    font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;
+    color: var(--text-secondary); margin: 0 0 6px; font-weight: 600;
+  }
+  label.toggle {
+    display: flex; align-items: center; gap: 8px; font-size: 13px;
+    padding: 3px 0; cursor: pointer; user-select: none;
+  }
+  label.toggle input { accent-color: var(--series-1); margin: 0; }
+  .swatch { width: 22px; height: 0; border-top-width: 4px; border-top-style: solid; border-radius: 2px; flex: none; }
+  .swatch.thick { border-top-width: 6px; }
+  .swatch.dashed { border-top-style: dashed; border-top-width: 3px; }
+  .swatch.dotted { border-top-style: dotted; border-top-width: 3px; }
+  .chip { width: 18px; height: 18px; border-radius: 50%; display: inline-flex;
+          align-items: center; justify-content: center; font-size: 11px; flex: none;
+          background: #fff; box-shadow: 0 0 0 1px var(--ring); }
+  .dot { width: 12px; height: 12px; border-radius: 50%; flex: none; box-shadow: 0 0 0 1px var(--ring); }
+
+  /* Mode switch */
+  #modeSwitch { display: flex; border: 1px solid var(--gridline); border-radius: 8px; overflow: hidden; margin: 10px 0 14px; }
+  #modeSwitch button {
+    flex: 1; padding: 7px 0; font-size: 12.5px; border: 0; background: transparent;
+    cursor: pointer; color: var(--text-secondary); font-family: inherit;
+  }
+  #modeSwitch button.active { background: var(--series-1); color: #fff; font-weight: 600; }
+
+  /* Stats panel */
+  #stats { border: 1px solid var(--gridline); border-radius: 10px; padding: 12px; background: #fff; }
+  #stats .statrow { display: flex; justify-content: space-between; font-size: 13px; padding: 3px 0; }
+  #stats .statrow .v { font-weight: 600; font-variant-numeric: tabular-nums; }
+  #stats .hero { font-size: 26px; font-weight: 700; line-height: 1.1; }
+  #stats .hero-label { font-size: 11.5px; color: var(--text-muted); margin-bottom: 8px; }
+  #stats ol { margin: 4px 0 0; padding-left: 18px; font-size: 12.5px; color: var(--text-secondary); }
+  #stats ol li { padding: 1px 0; }
+  #stats ol li b { color: var(--text-primary); font-weight: 600; }
+  .chart-title { font-size: 12px; color: var(--text-secondary); margin: 12px 0 4px; font-weight: 600; }
+  #trendChart { width: 100%; }
+  .disclaimer {
+    font-size: 11px; color: var(--text-muted); background: #f9f9f7;
+    border: 1px solid var(--gridline); border-radius: 8px; padding: 8px 10px; margin-top: 12px; line-height: 1.45;
+  }
+  .divider { border: 0; border-top: 1px solid var(--gridline); margin: 12px 0; }
+
+  /* ---------- Map ---------- */
+  #map { flex: 1; height: 100%; }
+  .leaflet-container { background: #eceff1; font-family: inherit; }
+
+  /* Search bar */
+  #searchWrap {
+    position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
+    z-index: 1000; width: min(420px, calc(100% - 110px)); display: flex; gap: 6px;
+  }
+  #searchBox {
+    flex: 1; padding: 9px 13px; border: 1px solid var(--gridline); border-radius: 10px;
+    font-size: 14px; font-family: inherit; background: #fff;
+    box-shadow: 0 2px 8px rgba(11,11,11,0.12); outline: none;
+  }
+  #searchBox:focus { border-color: var(--series-1); }
+  #searchMsg {
+    position: absolute; top: 44px; left: 0; right: 0; background: #fff; border: 1px solid var(--gridline);
+    border-radius: 8px; padding: 6px 10px; font-size: 12px; color: var(--text-secondary); display: none;
+  }
+
+  /* Legend (bottom-left) */
+  #legend {
+    position: absolute; bottom: 24px; left: 12px; z-index: 1000;
+    background: rgba(255,255,255,0.95); border: 1px solid var(--gridline); border-radius: 10px;
+    padding: 10px 12px; font-size: 11.5px; box-shadow: 0 2px 8px rgba(11,11,11,0.10);
+    max-width: 210px;
+  }
+  #legend h3 { margin: 0 0 6px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-secondary); }
+  #legend .row { display: flex; align-items: center; gap: 7px; padding: 2px 0; color: var(--text-secondary); }
+  #legendToggle { display: none; }
+
+  /* Neighborhood labels */
+  .nb-label { background: none; border: none; box-shadow: none; }
+  .nb-label span {
+    font-size: 10.5px; color: #7a7f87; letter-spacing: 0.10em; text-transform: uppercase;
+    white-space: nowrap; text-shadow: 0 0 3px #fff, 0 0 3px #fff, 0 0 3px #fff;
+  }
+  .poi-icon { background: none; border: none; }
+  .poi-icon .chip { width: 26px; height: 26px; font-size: 14px; box-shadow: 0 1px 4px rgba(11,11,11,0.25), 0 0 0 1px var(--ring); }
+
+  /* Popups */
+  .leaflet-popup-content { font-size: 13px; line-height: 1.5; margin: 12px 14px; }
+  .leaflet-popup-content h4 { margin: 0 0 4px; font-size: 14px; }
+  .popup-tag { display: inline-block; font-size: 10.5px; font-weight: 600; padding: 1px 7px; border-radius: 99px; color: #fff; margin-bottom: 6px; }
+  .popup-grid { display: grid; grid-template-columns: 20px 1fr; gap: 2px 6px; align-items: baseline; }
+  .popup-grid .k { text-align: center; }
+  .popup-note { font-size: 11.5px; color: var(--text-muted); margin-top: 6px; }
+
+  /* Chart tooltip */
+  #chartTip {
+    position: fixed; pointer-events: none; display: none; z-index: 3000;
+    background: #fff; border: 1px solid var(--gridline); border-radius: 6px;
+    box-shadow: 0 2px 8px rgba(11,11,11,0.15); padding: 5px 9px; font-size: 12px;
+  }
+  #chartTip b { font-variant-numeric: tabular-nums; }
+
+  /* Mobile */
+  #sidebarToggle {
+    display: none; position: absolute; top: 12px; left: 12px; z-index: 1200;
+    width: 40px; height: 40px; border-radius: 10px; border: 1px solid var(--gridline);
+    background: #fff; font-size: 18px; cursor: pointer; box-shadow: 0 2px 8px rgba(11,11,11,0.12);
+  }
+  @media (max-width: 768px) {
+    #sidebar {
+      position: absolute; left: 0; top: 0; bottom: 0; transform: translateX(-100%);
+      transition: transform 0.25s ease; width: min(320px, 86vw); min-width: 0;
+      box-shadow: 4px 0 16px rgba(11,11,11,0.18);
+    }
+    #sidebar.open { transform: translateX(0); }
+    #sidebarToggle { display: block; }
+    #searchWrap { width: calc(100% - 130px); left: auto; right: 12px; transform: none; }
+    #legend { max-width: 170px; bottom: 30px; }
+    #legend .body { display: none; }
+    #legend.open .body { display: block; }
+    #legendToggle { display: inline; float: right; cursor: pointer; color: var(--series-1); font-size: 11px; }
+  }
+</style>
+</head>
+<body data-palette="#2a78d6">
+
+<button id="sidebarToggle" aria-label="Toggle panel">☰</button>
+
+<aside id="sidebar">
+  <h1>🚲 Atlanta Cycling Map</h1>
+  <p class="subtitle">Bike infrastructure, neighborhoods, destinations &amp; safety</p>
+
+  <div id="modeSwitch" role="tablist" aria-label="Rider mode">
+    <button id="modeCasual" class="active">Casual ride</button>
+    <button id="modeCommuter">Commuter</button>
+  </div>
+
+  <div class="section">
+    <h2>Bike infrastructure</h2>
+    <label class="toggle"><input type="checkbox" data-layer="trail" checked><span class="swatch thick" style="border-color:var(--lane-trail)"></span>Multi-use trails (BeltLine, PATH400)</label>
+    <label class="toggle"><input type="checkbox" data-layer="protected" checked><span class="swatch" style="border-color:var(--lane-protected)"></span>Protected bike lanes</label>
+    <label class="toggle"><input type="checkbox" data-layer="buffered" checked><span class="swatch" style="border-color:var(--lane-buffered)"></span>Buffered bike lanes</label>
+    <label class="toggle"><input type="checkbox" data-layer="standard" checked><span class="swatch" style="border-color:var(--lane-standard)"></span>Standard bike lanes</label>
+    <label class="toggle"><input type="checkbox" data-layer="sharrow" checked><span class="swatch dashed" style="border-color:var(--lane-sharrow)"></span>Sharrows (shared lanes)</label>
+  </div>
+
+  <div class="section">
+    <h2>Overlays</h2>
+    <label class="toggle"><input type="checkbox" data-layer="neighborhoods" checked><span class="swatch dotted" style="border-color:#9aa0a6"></span>Neighborhood boundaries</label>
+    <label class="toggle"><input type="checkbox" data-layer="marta"><span class="chip">🚇</span>MARTA stations</label>
+  </div>
+
+  <div class="section">
+    <h2>Attractions &amp; spots</h2>
+    <label class="toggle"><input type="checkbox" data-layer="parks" checked><span class="chip">🌳</span>Parks</label>
+    <label class="toggle"><input type="checkbox" data-layer="access" checked><span class="chip">🛤️</span>BeltLine access points</label>
+    <label class="toggle"><input type="checkbox" data-layer="shops" checked><span class="chip">🔧</span>Bike shops &amp; rentals</label>
+    <label class="toggle"><input type="checkbox" data-layer="food" checked><span class="chip">☕</span>Cafes &amp; breweries</label>
+    <label class="toggle"><input type="checkbox" data-layer="landmarks" checked><span class="chip">⭐</span>Landmarks</label>
+  </div>
+
+  <div class="section">
+    <h2>Safety layer</h2>
+    <label class="toggle"><input type="checkbox" data-layer="crashBike"><span class="dot" style="background:var(--risk-high)"></span>Bike crash hotspots (2021–2025)</label>
+    <label class="toggle"><input type="checkbox" data-layer="crashScooter"><span class="dot" style="background:var(--risk-med)"></span>E-scooter crash hotspots</label>
+    <label class="toggle"><input type="checkbox" data-layer="corridors"><span class="swatch thick" style="border-color:var(--risk-high); opacity:.5"></span>High-crash corridors</label>
+  </div>
+
+  <hr class="divider">
+
+  <div id="stats">
+    <div class="hero-label">Reported bike crashes, City of Atlanta · 2025</div>
+    <div class="hero">163</div>
+    <div class="statrow"><span>Resulting in injury</span><span class="v">68%</span></div>
+    <div class="statrow"><span>E-scooter crashes (2025)</span><span class="v">210</span></div>
+    <div class="statrow"><span>5-yr total (bike, 2021–2025)</span><span class="v">783</span></div>
+
+    <div class="chart-title">Bike crashes per year</div>
+    <div id="trendChart" role="img" aria-label="Bar chart of reported bike crashes per year, 2021 to 2025: 142, 158, 171, 149, 163."></div>
+
+    <div class="chart-title">Top 5 high-crash corridors</div>
+    <ol>
+      <li><b>Moreland Ave</b> — 74 crashes</li>
+      <li><b>DeKalb Ave</b> — 61 crashes</li>
+      <li><b>Ponce de Leon Ave</b> — 55 crashes</li>
+      <li><b>Memorial Dr</b> — 48 crashes</li>
+      <li><b>Metropolitan Pkwy</b> — 41 crashes</li>
+    </ol>
+  </div>
+
+  <div class="disclaimer">
+    ⚠️ Safety figures and route attributes are <b>illustrative sample data</b> shaped to match published
+    reporting patterns — not official statistics. See the README for how to load real GDOT / Atlanta
+    Police crash data and the city's official GIS layers.
+  </div>
+</aside>
+
+<div id="map">
+  <div id="searchWrap">
+    <input id="searchBox" type="search" placeholder="Search address, neighborhood, or place…" aria-label="Search">
+    <div id="searchMsg"></div>
+  </div>
+  <div id="legend">
+    <h3>Legend <span id="legendToggle">show</span></h3>
+    <div class="body">
+      <div class="row"><span class="swatch thick" style="border-color:var(--lane-trail)"></span>Multi-use trail</div>
+      <div class="row"><span class="swatch" style="border-color:var(--lane-protected)"></span>Protected lane</div>
+      <div class="row"><span class="swatch" style="border-color:var(--lane-buffered)"></span>Buffered lane</div>
+      <div class="row"><span class="swatch" style="border-color:var(--lane-standard)"></span>Standard lane</div>
+      <div class="row"><span class="swatch dashed" style="border-color:var(--lane-sharrow)"></span>Sharrow</div>
+      <div class="row"><span class="swatch dotted" style="border-color:#9aa0a6"></span>Neighborhood</div>
+      <div class="row"><span class="dot" style="background:var(--risk-low)"></span>Crash risk: low</div>
+      <div class="row"><span class="dot" style="background:var(--risk-med)"></span>Crash risk: medium</div>
+      <div class="row"><span class="dot" style="background:var(--risk-high)"></span>Crash risk: high</div>
+    </div>
+  </div>
+</div>
+
+<div id="chartTip"></div>
+
+<script src="vendor/leaflet/leaflet.js"></script>
+<script>
+'use strict';
+
+/* =====================================================================
+   DATA — geometries are simplified approximations of real Atlanta
+   facilities; safety numbers are illustrative (see README to load
+   official GDOT/APD data). Coordinates are [lat, lng].
+   ===================================================================== */
+
+// type: trail | protected | buffered | standard | sharrow
+// hills: Flat | Rolling | Hilly ; lighting: Lit | Partially lit | Unlit
+const ROUTES = [
+  // ---- Multi-use trails ----
+  { name: 'BeltLine Eastside Trail', type: 'trail', surface: 'Paved (concrete)', hills: 'Flat',
+    lighting: 'Lit', marta: ['King Memorial (0.5 mi via Wylie St)', 'Inman Park/Reynoldstown (0.4 mi)'],
+    closures: '—', note: 'Atlanta’s busiest trail; expect heavy foot traffic on weekends.',
+    coords: [[33.7900,-84.3700],[33.7847,-84.3689],[33.7815,-84.3667],[33.7760,-84.3655],[33.7723,-84.3652],[33.7714,-84.3648],[33.7665,-84.3636],[33.7591,-84.3641],[33.7563,-84.3637],[33.7541,-84.3633],[33.7480,-84.3622],[33.7469,-84.3627]] },
+  { name: 'BeltLine Westside Trail', type: 'trail', surface: 'Paved (concrete)', hills: 'Rolling',
+    lighting: 'Lit', marta: ['West End (0.6 mi via RDA Blvd)', 'Ashby (0.5 mi)'],
+    closures: '—', note: 'Quieter than the Eastside; connects Adair Park to Washington Park.',
+    coords: [[33.7268,-84.4137],[33.7300,-84.4200],[33.7359,-84.4262],[33.7420,-84.4275],[33.7480,-84.4282],[33.7530,-84.4288],[33.7580,-84.4268]] },
+  { name: 'BeltLine Southside Trail', type: 'trail', surface: 'Mixed (paved + interim gravel)', hills: 'Rolling',
+    lighting: 'Partially lit', marta: ['—'],
+    closures: 'Segments under construction — check beltline.org before night rides.',
+    note: 'Links the Eastside and Westside trails around the south side.',
+    coords: [[33.7469,-84.3627],[33.7400,-84.3660],[33.7330,-84.3760],[33.7290,-84.3860],[33.7260,-84.3950],[33.7250,-84.4060],[33.7268,-84.4137]] },
+  { name: 'BeltLine Northeast Trail', type: 'trail', surface: 'Paved (concrete)', hills: 'Rolling',
+    lighting: 'Partially lit', marta: ['Lindbergh Center (0.8 mi)'],
+    closures: 'Northern segments in phased construction.',
+    note: 'Extends the Eastside Trail north past Ansley Mall toward Lindbergh.',
+    coords: [[33.7900,-84.3700],[33.7952,-84.3718],[33.8010,-84.3700],[33.8080,-84.3680],[33.8150,-84.3690]] },
+  { name: 'PATH400 Greenway', type: 'trail', surface: 'Paved (concrete)', hills: 'Hilly',
+    lighting: 'Partially lit', marta: ['Buckhead (0.3 mi)', 'Lenox (0.6 mi)'],
+    closures: '—', note: 'Buckhead greenway along GA-400; several stout climbs.',
+    coords: [[33.8236,-84.3620],[33.8320,-84.3645],[33.8420,-84.3662],[33.8478,-84.3655],[33.8520,-84.3632],[33.8600,-84.3605]] },
+  { name: 'Freedom Park Trail', type: 'trail', surface: 'Paved (asphalt)', hills: 'Rolling',
+    lighting: 'Partially lit', marta: ['King Memorial (0.7 mi)', 'Inman Park/Reynoldstown (0.6 mi)'],
+    closures: '—', note: 'Connects Downtown to Candler Park through Freedom Park; crosses the BeltLine.',
+    coords: [[33.7615,-84.3768],[33.7638,-84.3690],[33.7660,-84.3636],[33.7671,-84.3565],[33.7662,-84.3480],[33.7690,-84.3395]] },
+  { name: 'Stone Mountain Trail (PATH)', type: 'trail', surface: 'Paved (asphalt)', hills: 'Rolling',
+    lighting: 'Partially lit', marta: ['King Memorial (on route)', 'Edgewood/Candler Park (on route)'],
+    closures: '—', note: 'Runs beside DeKalb Ave from Downtown toward Decatur and Stone Mountain.',
+    coords: [[33.7541,-84.3830],[33.7520,-84.3740],[33.7541,-84.3633],[33.7570,-84.3520],[33.7616,-84.3399],[33.7650,-84.3200]] },
+  { name: 'Proctor Creek Greenway', type: 'trail', surface: 'Paved (concrete)', hills: 'Rolling',
+    lighting: 'Unlit', marta: ['Bankhead (trailhead)'],
+    closures: '—', note: 'Westside nature greenway from Bankhead MARTA along Proctor Creek.',
+    coords: [[33.7720,-84.4290],[33.7790,-84.4360],[33.7850,-84.4420],[33.7900,-84.4480]] },
+  { name: 'Westside BeltLine Connector', type: 'trail', surface: 'Paved (concrete)', hills: 'Rolling',
+    lighting: 'Lit', marta: ['Ashby (0.4 mi)'],
+    closures: '—', note: 'Links Georgia Tech / Marietta St to the Westside Trail.',
+    coords: [[33.7720,-84.4050],[33.7680,-84.4120],[33.7640,-84.4190],[33.7580,-84.4268]] },
+
+  // ---- Protected lanes ----
+  { name: '10th Street Cycle Track', type: 'protected', surface: 'Paved (asphalt)', hills: 'Flat',
+    lighting: 'Lit', marta: ['Midtown (0.3 mi via 10th St)'],
+    closures: '—', note: 'Two-way cycle track along Piedmont Park’s southern edge.',
+    coords: [[33.7813,-84.3860],[33.7814,-84.3760],[33.7815,-84.3667]] },
+  { name: 'Juniper Street Protected Lane', type: 'protected', surface: 'Paved (asphalt)', hills: 'Flat',
+    lighting: 'Lit', marta: ['North Ave (0.3 mi)', 'Midtown (0.4 mi)'],
+    closures: '—', note: 'Curb-protected lane through the heart of Midtown.',
+    coords: [[33.7857,-84.3838],[33.7800,-84.3836],[33.7750,-84.3834],[33.7724,-84.3832]] },
+  { name: 'Luckie Street Protected Lane', type: 'protected', surface: 'Paved (asphalt)', hills: 'Rolling',
+    lighting: 'Lit', marta: ['Peachtree Center (0.3 mi)', 'Dome/GWCC (0.4 mi)'],
+    closures: '—', note: 'Links Centennial Olympic Park to Georgia Tech.',
+    coords: [[33.7607,-84.3930],[33.7660,-84.3960],[33.7720,-84.4000]] },
+  { name: 'Peachtree Center Ave Protected Lane', type: 'protected', surface: 'Paved (asphalt)', hills: 'Rolling',
+    lighting: 'Lit', marta: ['Peachtree Center (adjacent)', 'Civic Center (0.3 mi)'],
+    closures: '—', note: 'Downtown north–south protected connector.',
+    coords: [[33.7540,-84.3855],[33.7590,-84.3857],[33.7630,-84.3859]] },
+
+  // ---- Buffered lanes ----
+  { name: 'Piedmont Ave Buffered Lane', type: 'buffered', surface: 'Paved (asphalt)', hills: 'Rolling',
+    lighting: 'Lit', marta: ['Civic Center (0.3 mi)', 'North Ave (0.4 mi)'],
+    closures: '—', note: 'Painted buffer; watch turning traffic at Ponce.',
+    coords: [[33.7600,-84.3830],[33.7690,-84.3815],[33.7770,-84.3808],[33.7860,-84.3800]] },
+  { name: 'Marietta St Buffered Lane', type: 'buffered', surface: 'Paved (asphalt)', hills: 'Rolling',
+    lighting: 'Lit', marta: ['Five Points (0.2 mi)'],
+    closures: '—', note: 'Downtown to West Midtown along Marietta St.',
+    coords: [[33.7560,-84.3920],[33.7630,-84.3980],[33.7700,-84.4040],[33.7780,-84.4110]] },
+  { name: 'Joseph E. Lowery Blvd Buffered Lane', type: 'buffered', surface: 'Paved (asphalt)', hills: 'Rolling',
+    lighting: 'Partially lit', marta: ['Ashby (0.2 mi)', 'West End (0.5 mi)'],
+    closures: '—', note: 'Westside north–south spine; connects to the Westside Trail.',
+    coords: [[33.7350,-84.4178],[33.7450,-84.4180],[33.7565,-84.4180],[33.7620,-84.4182]] },
+  { name: 'Monroe Dr Buffered Lane', type: 'buffered', surface: 'Paved (asphalt)', hills: 'Rolling',
+    lighting: 'Lit', marta: ['Midtown (0.8 mi via 10th St)'],
+    closures: '—', note: 'Runs along Piedmont Park’s east side to Ansley.',
+    coords: [[33.7815,-84.3667],[33.7870,-84.3672],[33.7930,-84.3690]] },
+
+  // ---- Standard lanes ----
+  { name: 'Edgewood Ave Bike Lane', type: 'standard', surface: 'Paved (asphalt)', hills: 'Rolling',
+    lighting: 'Lit', marta: ['Five Points (0.2 mi)', 'Inman Park/Reynoldstown (0.3 mi)'],
+    closures: '—', note: 'Popular nightlife corridor — ride alert on weekend evenings.',
+    coords: [[33.7541,-84.3880],[33.7548,-84.3790],[33.7555,-84.3720],[33.7562,-84.3640]] },
+  { name: 'North Highland Ave Bike Lane', type: 'standard', surface: 'Paved (asphalt)', hills: 'Hilly',
+    lighting: 'Lit', marta: ['Inman Park/Reynoldstown (0.6 mi)'],
+    closures: '—', note: 'Inman Park to Virginia-Highland; a few punchy climbs.',
+    coords: [[33.7590,-84.3585],[33.7660,-84.3555],[33.7730,-84.3535],[33.7810,-84.3522]] },
+  { name: 'Glenwood Ave Bike Lane', type: 'standard', surface: 'Paved (asphalt)', hills: 'Rolling',
+    lighting: 'Partially lit', marta: ['King Memorial (0.9 mi)'],
+    closures: '—', note: 'East–west route into East Atlanta Village.',
+    coords: [[33.7397,-84.3700],[33.7398,-84.3570],[33.7400,-84.3440]] },
+  { name: 'Ralph David Abernathy Blvd Bike Lane', type: 'standard', surface: 'Paved (asphalt)', hills: 'Rolling',
+    lighting: 'Lit', marta: ['West End (on route)'],
+    closures: '—', note: 'West End main street; crosses the Westside Trail.',
+    coords: [[33.7365,-84.4270],[33.7365,-84.4130],[33.7400,-84.4010],[33.7440,-84.3900]] },
+  { name: 'Boulevard Bike Lane', type: 'standard', surface: 'Paved (asphalt)', hills: 'Hilly',
+    lighting: 'Lit', marta: ['King Memorial (0.4 mi)'],
+    closures: '—', note: 'Grant Park to Old Fourth Ward; steady grade northbound.',
+    coords: [[33.7330,-84.3717],[33.7440,-84.3715],[33.7550,-84.3714],[33.7660,-84.3712]] },
+
+  // ---- Sharrows ----
+  { name: 'Auburn Ave Sharrows', type: 'sharrow', surface: 'Paved (asphalt)', hills: 'Rolling',
+    lighting: 'Lit', marta: ['King Memorial (0.3 mi)'],
+    closures: '—', note: 'Historic Sweet Auburn corridor; shared lane markings only.',
+    coords: [[33.7555,-84.3870],[33.7560,-84.3790],[33.7565,-84.3720]] },
+  { name: 'Virginia Ave Sharrows', type: 'sharrow', surface: 'Paved (asphalt)', hills: 'Rolling',
+    lighting: 'Lit', marta: ['—'],
+    closures: '—', note: 'Low-traffic neighborhood street through Virginia-Highland.',
+    coords: [[33.7810,-84.3630],[33.7809,-84.3575],[33.7808,-84.3522]] },
+  { name: 'McLendon Ave Sharrows', type: 'sharrow', surface: 'Paved (asphalt)', hills: 'Rolling',
+    lighting: 'Partially lit', marta: ['Edgewood/Candler Park (0.4 mi)'],
+    closures: '—', note: 'Quiet Candler Park street; popular casual route.',
+    coords: [[33.7635,-84.3450],[33.7632,-84.3390],[33.7630,-84.3330]] },
+  { name: 'Wylie St Sharrows', type: 'sharrow', surface: 'Paved (asphalt)', hills: 'Flat',
+    lighting: 'Partially lit', marta: ['King Memorial (0.4 mi)'],
+    closures: '—', note: 'Cabbagetown connector between the BeltLine and East Atlanta.',
+    coords: [[33.7480,-84.3622],[33.7478,-84.3530],[33.7477,-84.3450]] }
+];
+
+const NEIGHBORHOODS = [
+  { name: 'Midtown',              coords: [[33.7700,-84.3900],[33.7900,-84.3900],[33.7900,-84.3700],[33.7815,-84.3667],[33.7700,-84.3700]] },
+  { name: 'Downtown',             coords: [[33.7450,-84.4000],[33.7700,-84.4000],[33.7700,-84.3790],[33.7450,-84.3790]] },
+  { name: 'Old Fourth Ward',      coords: [[33.7530,-84.3790],[33.7724,-84.3790],[33.7724,-84.3640],[33.7530,-84.3640]] },
+  { name: 'Inman Park',           coords: [[33.7530,-84.3640],[33.7660,-84.3640],[33.7660,-84.3490],[33.7530,-84.3490]] },
+  { name: 'Virginia-Highland',    coords: [[33.7724,-84.3640],[33.7900,-84.3640],[33.7900,-84.3470],[33.7724,-84.3470]] },
+  { name: 'Poncey-Highland',      coords: [[33.7660,-84.3640],[33.7724,-84.3640],[33.7724,-84.3470],[33.7660,-84.3470]] },
+  { name: 'Candler Park',         coords: [[33.7590,-84.3490],[33.7724,-84.3490],[33.7724,-84.3330],[33.7590,-84.3330]] },
+  { name: 'Cabbagetown',          coords: [[33.7440,-84.3660],[33.7530,-84.3660],[33.7530,-84.3540],[33.7440,-84.3540]] },
+  { name: 'Grant Park',           coords: [[33.7250,-84.3800],[33.7440,-84.3800],[33.7440,-84.3620],[33.7250,-84.3620]] },
+  { name: 'East Atlanta Village', coords: [[33.7330,-84.3540],[33.7440,-84.3540],[33.7440,-84.3360],[33.7330,-84.3360]] },
+  { name: 'West End',             coords: [[33.7280,-84.4300],[33.7440,-84.4300],[33.7440,-84.4060],[33.7280,-84.4060]] },
+  { name: 'Home Park / West Midtown', coords: [[33.7700,-84.4160],[33.7900,-84.4160],[33.7900,-84.3900],[33.7700,-84.3900]] },
+  { name: 'Reynoldstown',         coords: [[33.7440,-84.3620],[33.7530,-84.3620],[33.7530,-84.3490],[33.7440,-84.3490]] },
+  { name: 'Buckhead',             coords: [[33.8180,-84.3900],[33.8620,-84.3900],[33.8620,-84.3480],[33.8180,-84.3480]] }
+];
+
+const POIS = {
+  parks: [
+    { name: 'Piedmont Park', lat: 33.7851, lng: -84.3738, desc: 'Atlanta’s flagship park; direct BeltLine Eastside access at 10th & Monroe.' },
+    { name: 'Grant Park / Zoo Atlanta', lat: 33.7327, lng: -84.3720, desc: 'Historic park and zoo; Boulevard bike lane runs along the west side.' },
+    { name: 'Freedom Park', lat: 33.7660, lng: -84.3580, desc: 'Linear park carrying the Freedom Park Trail between Downtown and Candler Park.' },
+    { name: 'Centennial Olympic Park', lat: 33.7603, lng: -84.3936, desc: 'Downtown landmark park; Luckie St protected lane starts here.' },
+    { name: 'Historic Fourth Ward Park', lat: 33.7680, lng: -84.3670, desc: 'Skatepark, splash pad, and lawn steps off the Eastside Trail.' },
+    { name: 'Candler Park', lat: 33.7690, lng: -84.3395, desc: 'Golf, playgrounds, and the eastern end of the Freedom Park Trail.' }
+  ],
+  access: [
+    { name: 'Eastside Trail — 10th & Monroe', lat: 33.7815, lng: -84.3667, desc: 'North gateway to the Eastside Trail at Piedmont Park.' },
+    { name: 'Eastside Trail — Ponce City Market ramp', lat: 33.7723, lng: -84.3652, desc: 'Main PCM access ramp; bike parking on both levels.' },
+    { name: 'Eastside Trail — Old Fourth Ward Skatepark', lat: 33.7665, lng: -84.3636, desc: 'Access at Historic Fourth Ward Park.' },
+    { name: 'Eastside Trail — Irwin St', lat: 33.7591, lng: -84.3641, desc: 'Krog District access near Irwin St murals.' },
+    { name: 'Eastside Trail — Krog / Wylie', lat: 33.7480, lng: -84.3622, desc: 'Cabbagetown access near the Krog Street Tunnel.' },
+    { name: 'Westside Trail — White St', lat: 33.7359, lng: -84.4262, desc: 'West End gateway to the Westside Trail.' },
+    { name: 'Westside Trail — Washington Park', lat: 33.7580, lng: -84.4268, desc: 'Northern Westside Trail trailhead.' },
+    { name: 'PATH400 — Miami Circle trailhead', lat: 33.8236, lng: -84.3620, desc: 'Southern trailhead for PATH400.' },
+    { name: 'Proctor Creek — Bankhead trailhead', lat: 33.7720, lng: -84.4290, desc: 'Greenway trailhead at Bankhead MARTA.' }
+  ],
+  shops: [
+    { name: 'Atlanta Cycling — Ansley', lat: 33.7940, lng: -84.3720, desc: 'Full-service shop near the Northeast Trail and Piedmont Park.' },
+    { name: 'Loose Nuts Cycles', lat: 33.7335, lng: -84.3715, desc: 'Grant Park neighborhood shop; repairs and used bikes.' },
+    { name: 'Skate Escape', lat: 33.7810, lng: -84.3720, desc: 'Bike and skate rentals across from Piedmont Park — handy for casual loops.' },
+    { name: 'Atlanta Bicycle Barn', lat: 33.7595, lng: -84.3645, desc: 'Rentals and repairs right off the Eastside Trail.' },
+    { name: 'Peachtree Bikes — Buckhead', lat: 33.8420, lng: -84.3780, desc: 'Buckhead shop convenient to PATH400.' },
+    { name: 'Bike-share note (former Relay hub)', lat: 33.7554, lng: -84.3880, desc: 'Relay Bike Share ceased operations in 2020; docked hubs like this one were removed. Shared e-bikes/scooters (Lime, Bird) now fill this niche — see README.' }
+  ],
+  food: [
+    { name: 'New Realm Brewing', lat: 33.7717, lng: -84.3640, desc: 'Brewery with a patio directly on the Eastside Trail.' },
+    { name: 'Ladybird Grove & Mess Hall', lat: 33.7605, lng: -84.3640, desc: 'Trailside patio classic on the Eastside Trail.' },
+    { name: 'Dancing Goats Coffee — PCM', lat: 33.7730, lng: -84.3665, desc: 'Coffee stop inside Ponce City Market.' },
+    { name: 'Condesa Coffee', lat: 33.7620, lng: -84.3705, desc: 'Old Fourth Ward cafe two blocks from the trail.' },
+    { name: 'Chrome Yellow Trading Co.', lat: 33.7560, lng: -84.3720, desc: 'Edgewood Ave coffee along the bike lane.' },
+    { name: 'Hop City — Krog Street Market', lat: 33.7530, lng: -84.3640, desc: 'Beer shop and taps at Krog Street Market.' },
+    { name: 'Monday Night Garage', lat: 33.7360, lng: -84.4260, desc: 'Brewery right on the Westside Trail.' },
+    { name: 'Wild Heaven West End', lat: 33.7365, lng: -84.4245, desc: 'Brewery at Lee + White, steps from the Westside Trail.' },
+    { name: 'Orpheus Brewing', lat: 33.7893, lng: -84.3690, desc: 'Overlooks Piedmont Park near the Northeast Trail.' },
+    { name: 'Victory Sandwich Bar', lat: 33.7573, lng: -84.3525, desc: 'Inman Park stop with rack parking out front.' }
+  ],
+  landmarks: [
+    { name: 'Ponce City Market', lat: 33.7726, lng: -84.3655, desc: 'Historic Sears building on the Eastside Trail; food hall and roof park.' },
+    { name: 'Krog Street Market', lat: 33.7530, lng: -84.3637, desc: 'Food hall beside the Eastside Trail and Krog Tunnel.' },
+    { name: 'Centennial Olympic Park', lat: 33.7605, lng: -84.3940, desc: '1996 Olympics legacy park, ringed by downtown attractions.' },
+    { name: 'MLK Jr. National Historical Park', lat: 33.7554, lng: -84.3722, desc: 'On Auburn Ave sharrows; free to visit.' },
+    { name: 'Jackson Street Bridge', lat: 33.7573, lng: -84.3720, desc: 'The classic Atlanta skyline photo spot.' },
+    { name: 'Fox Theatre', lat: 33.7725, lng: -84.3857, desc: 'Historic theatre on Peachtree, near the Juniper St lane.' },
+    { name: 'Mercedes-Benz Stadium', lat: 33.7554, lng: -84.4008, desc: 'Event-day traffic hotspot — plan around games.' }
+  ],
+  marta: [
+    { name: 'Midtown', lat: 33.7807, lng: -84.3865 }, { name: 'North Avenue', lat: 33.7716, lng: -84.3872 },
+    { name: 'Arts Center', lat: 33.7890, lng: -84.3872 }, { name: 'Civic Center', lat: 33.7663, lng: -84.3876 },
+    { name: 'Peachtree Center', lat: 33.7593, lng: -84.3877 }, { name: 'Five Points', lat: 33.7540, lng: -84.3917 },
+    { name: 'Georgia State', lat: 33.7501, lng: -84.3857 }, { name: 'King Memorial', lat: 33.7499, lng: -84.3765 },
+    { name: 'Inman Park/Reynoldstown', lat: 33.7573, lng: -84.3527 }, { name: 'Edgewood/Candler Park', lat: 33.7616, lng: -84.3399 },
+    { name: 'West End', lat: 33.7360, lng: -84.4133 }, { name: 'Ashby', lat: 33.7565, lng: -84.4177 },
+    { name: 'Vine City', lat: 33.7566, lng: -84.4041 }, { name: 'Bankhead', lat: 33.7720, lng: -84.4290 },
+    { name: 'Lindbergh Center', lat: 33.8232, lng: -84.3693 }, { name: 'Buckhead', lat: 33.8478, lng: -84.3670 },
+    { name: 'Lenox', lat: 33.8454, lng: -84.3571 }
+  ]
+};
+
+// Illustrative crash hotspots. sev: low (1-4 crashes/5yr), med (5-9), high (10+)
+const CRASHES = [
+  // bikes
+  { mode: 'bike', lat: 33.7660, lng: -84.3495, n: 14, sev: 'high', label: 'Moreland Ave @ Freedom Pkwy' },
+  { mode: 'bike', lat: 33.7400, lng: -84.3490, n: 12, sev: 'high', label: 'Moreland Ave @ Glenwood Ave' },
+  { mode: 'bike', lat: 33.7541, lng: -84.3633, n: 11, sev: 'high', label: 'DeKalb Ave @ Krog St' },
+  { mode: 'bike', lat: 33.7616, lng: -84.3399, n: 9,  sev: 'med',  label: 'DeKalb Ave @ Oakdale Rd' },
+  { mode: 'bike', lat: 33.7724, lng: -84.3655, n: 13, sev: 'high', label: 'Ponce de Leon @ BeltLine crossing' },
+  { mode: 'bike', lat: 33.7723, lng: -84.3810, n: 8,  sev: 'med',  label: 'Ponce de Leon @ Piedmont Ave' },
+  { mode: 'bike', lat: 33.7469, lng: -84.3720, n: 10, sev: 'high', label: 'Memorial Dr @ Boulevard' },
+  { mode: 'bike', lat: 33.7467, lng: -84.3560, n: 7,  sev: 'med',  label: 'Memorial Dr @ Pearl St' },
+  { mode: 'bike', lat: 33.7200, lng: -84.4000, n: 9,  sev: 'med',  label: 'Metropolitan Pkwy @ University Ave' },
+  { mode: 'bike', lat: 33.7540, lng: -84.3917, n: 8,  sev: 'med',  label: 'Peachtree St @ Five Points' },
+  { mode: 'bike', lat: 33.7815, lng: -84.3800, n: 6,  sev: 'med',  label: '10th St @ Piedmont Ave' },
+  { mode: 'bike', lat: 33.7590, lng: -84.3585, n: 4,  sev: 'low',  label: 'N Highland @ Elizabeth St' },
+  { mode: 'bike', lat: 33.7365, lng: -84.4133, n: 5,  sev: 'med',  label: 'RDA Blvd @ Lee St' },
+  { mode: 'bike', lat: 33.7857, lng: -84.3838, n: 3,  sev: 'low',  label: '14th St @ Juniper St' },
+  { mode: 'bike', lat: 33.7330, lng: -84.3717, n: 3,  sev: 'low',  label: 'Boulevard @ Atlanta Ave' },
+  { mode: 'bike', lat: 33.8236, lng: -84.3640, n: 4,  sev: 'low',  label: 'Piedmont Rd @ Miami Circle' },
+  { mode: 'bike', lat: 33.7700, lng: -84.4050, n: 3,  sev: 'low',  label: 'Marietta St @ Means St' },
+  { mode: 'bike', lat: 33.7555, lng: -84.3790, n: 2,  sev: 'low',  label: 'Auburn Ave @ Boulevard' },
+  // scooters
+  { mode: 'scooter', lat: 33.7593, lng: -84.3877, n: 16, sev: 'high', label: 'Peachtree St @ Andrew Young Intl Blvd' },
+  { mode: 'scooter', lat: 33.7726, lng: -84.3655, n: 12, sev: 'high', label: 'Ponce City Market / North Ave' },
+  { mode: 'scooter', lat: 33.7807, lng: -84.3865, n: 9,  sev: 'med',  label: 'Peachtree St @ 10th St (Midtown)' },
+  { mode: 'scooter', lat: 33.7540, lng: -84.3917, n: 11, sev: 'high', label: 'Five Points / Marietta St' },
+  { mode: 'scooter', lat: 33.7605, lng: -84.3936, n: 8,  sev: 'med',  label: 'Centennial Olympic Park Dr' },
+  { mode: 'scooter', lat: 33.7660, lng: -84.3636, n: 6,  sev: 'med',  label: 'Eastside Trail @ O4W Skatepark' },
+  { mode: 'scooter', lat: 33.7530, lng: -84.3637, n: 5,  sev: 'med',  label: 'Krog Street Tunnel' },
+  { mode: 'scooter', lat: 33.7573, lng: -84.3527, n: 3,  sev: 'low',  label: 'Inman Park MARTA plaza' },
+  { mode: 'scooter', lat: 33.7725, lng: -84.3857, n: 4,  sev: 'low',  label: 'Peachtree St @ Fox Theatre' }
+];
+
+const CORRIDORS = [
+  { name: 'Moreland Ave', crashes: 74, injuryPct: 72,
+    coords: [[33.7280,-84.3490],[33.7400,-84.3490],[33.7530,-84.3492],[33.7660,-84.3495],[33.7740,-84.3497]] },
+  { name: 'DeKalb Ave', crashes: 61, injuryPct: 70,
+    coords: [[33.7541,-84.3830],[33.7541,-84.3633],[33.7570,-84.3520],[33.7616,-84.3399],[33.7650,-84.3200]] },
+  { name: 'Ponce de Leon Ave', crashes: 55, injuryPct: 65,
+    coords: [[33.7723,-84.3870],[33.7724,-84.3810],[33.7724,-84.3655],[33.7726,-84.3520],[33.7730,-84.3390]] },
+  { name: 'Memorial Dr', crashes: 48, injuryPct: 69,
+    coords: [[33.7470,-84.3860],[33.7469,-84.3720],[33.7469,-84.3627],[33.7467,-84.3560],[33.7460,-84.3400]] },
+  { name: 'Metropolitan Pkwy', crashes: 41, injuryPct: 74,
+    coords: [[33.7060,-84.4080],[33.7200,-84.4000],[33.7330,-84.3960],[33.7430,-84.3945]] }
+];
+
+const STATS = { years: [2021, 2022, 2023, 2024, 2025], bikeCrashes: [142, 158, 171, 149, 163] };
+
+/* =====================================================================
+   MAP SETUP
+   ===================================================================== */
+const map = L.map('map', { zoomControl: false }).setView([33.7650, -84.3800], 13);
+L.control.zoom({ position: 'topright' }).addTo(map);
+
+L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+  attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>',
+  subdomains: 'abcd', maxZoom: 19
+}).addTo(map);
+
+const LANE_STYLE = {
+  trail:     { weight: 6, opacity: 0.9 },
+  protected: { weight: 4, opacity: 0.9 },
+  buffered:  { weight: 4, opacity: 0.9 },
+  standard:  { weight: 4, opacity: 0.9 },
+  sharrow:   { weight: 3, opacity: 0.9, dashArray: '6 9' }
+};
+const LANE_COLOR = {
+  trail: getCss('--lane-trail'), protected: getCss('--lane-protected'),
+  buffered: getCss('--lane-buffered'), standard: getCss('--lane-standard'),
+  sharrow: getCss('--lane-sharrow')
+};
+const LANE_LABEL = {
+  trail: 'Multi-use trail', protected: 'Protected bike lane',
+  buffered: 'Buffered bike lane', standard: 'Standard bike lane', sharrow: 'Sharrows (shared lane)'
+};
+const RISK_COLOR = { low: getCss('--risk-low'), med: getCss('--risk-med'), high: getCss('--risk-high') };
+
+function getCss(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
+function esc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+
+/* ---------- Route layers with rider-info popups ---------- */
+const layers = {
+  trail: L.layerGroup(), protected: L.layerGroup(), buffered: L.layerGroup(),
+  standard: L.layerGroup(), sharrow: L.layerGroup(),
+  neighborhoods: L.layerGroup(), marta: L.layerGroup(),
+  parks: L.layerGroup(), access: L.layerGroup(), shops: L.layerGroup(),
+  food: L.layerGroup(), landmarks: L.layerGroup(),
+  crashBike: L.layerGroup(), crashScooter: L.layerGroup(), corridors: L.layerGroup()
+};
+
+const HILL_ICON = { Flat: '🟢', Rolling: '🟡', Hilly: '🔴' };
+
+ROUTES.forEach(r => {
+  const style = Object.assign({}, LANE_STYLE[r.type], { color: LANE_COLOR[r.type] });
+  const line = L.polyline(r.coords, style);
+  // invisible fat line underneath = bigger tap target
+  const hit = L.polyline(r.coords, { color: '#000', opacity: 0, weight: 18 });
+  const popup = `
+    <h4>${esc(r.name)}</h4>
+    <span class="popup-tag" style="background:${LANE_COLOR[r.type]}">${LANE_LABEL[r.type]}</span>
+    <div class="popup-grid">
+      <span class="k">🛣️</span><span><b>Surface:</b> ${esc(r.surface)}</span>
+      <span class="k">${HILL_ICON[r.hills] || '⛰️'}</span><span><b>Hilliness:</b> ${esc(r.hills)}</span>
+      <span class="k">🌙</span><span><b>Lighting:</b> ${esc(r.lighting)}</span>
+      <span class="k">🚇</span><span><b>MARTA:</b> ${r.marta.map(esc).join('; ')}</span>
+      <span class="k">🚧</span><span><b>Construction/closures:</b> ${esc(r.closures)}</span>
+    </div>
+    <div class="popup-note">${esc(r.note)}</div>`;
+  hit.bindPopup(popup, { maxWidth: 290 });
+  hit.on('mouseover', () => line.setStyle({ weight: style.weight + 3 }));
+  hit.on('mouseout',  () => line.setStyle({ weight: style.weight }));
+  layers[r.type].addLayer(line);
+  layers[r.type].addLayer(hit);
+});
+
+/* ---------- Neighborhoods ---------- */
+NEIGHBORHOODS.forEach(n => {
+  const poly = L.polygon(n.coords, {
+    color: '#9aa0a6', weight: 1.5, dashArray: '2 6', fill: true,
+    fillOpacity: 0.02, interactive: false
+  });
+  const center = poly.getBounds().getCenter();
+  const label = L.marker(center, {
+    icon: L.divIcon({ className: 'nb-label', html: `<span>${esc(n.name)}</span>`, iconSize: null }),
+    interactive: false, keyboard: false
+  });
+  layers.neighborhoods.addLayer(poly);
+  layers.neighborhoods.addLayer(label);
+});
+
+/* ---------- POIs ---------- */
+const POI_EMOJI = { parks: '🌳', access: '🛤️', shops: '🔧', food: '☕', landmarks: '⭐', marta: '🚇' };
+Object.keys(POI_EMOJI).forEach(cat => {
+  POIS[cat].forEach(p => {
+    const m = L.marker([p.lat, p.lng], {
+      icon: L.divIcon({ className: 'poi-icon', html: `<span class="chip">${POI_EMOJI[cat]}</span>`, iconSize: [26, 26], iconAnchor: [13, 13] }),
+      title: p.name
+    });
+    m.bindPopup(`<h4>${POI_EMOJI[cat]} ${esc(p.name)}</h4>${p.desc ? esc(p.desc) : (cat === 'marta' ? 'MARTA rail station — bikes allowed on all trains.' : '')}`, { maxWidth: 260 });
+    layers[cat].addLayer(m);
+  });
+});
+
+/* ---------- Safety layer ---------- */
+const SEV_LABEL = { low: 'Low', med: 'Medium', high: 'High' };
+CRASHES.forEach(c => {
+  const m = L.circleMarker([c.lat, c.lng], {
+    radius: 5 + c.n * 0.55, color: '#fff', weight: 1.5,
+    fillColor: RISK_COLOR[c.sev], fillOpacity: 0.85
+  });
+  m.bindPopup(`
+    <h4>${c.mode === 'bike' ? '🚲' : '🛴'} ${esc(c.label)}</h4>
+    <span class="popup-tag" style="background:${RISK_COLOR[c.sev]}">${SEV_LABEL[c.sev]} risk</span>
+    <div><b>${c.n}</b> reported ${c.mode} crashes, 2021–2025</div>
+    <div class="popup-note">Illustrative sample data — see README to load official GDOT/APD records.</div>`);
+  layers[c.mode === 'bike' ? 'crashBike' : 'crashScooter'].addLayer(m);
+});
+
+CORRIDORS.forEach(c => {
+  const line = L.polyline(c.coords, { color: RISK_COLOR.high, weight: 11, opacity: 0.30 });
+  line.bindPopup(`
+    <h4>⚠️ ${esc(c.name)} — high-crash corridor</h4>
+    <div class="popup-grid">
+      <span class="k">💥</span><span><b>${c.crashes}</b> bike/scooter crashes (2021–2025)</span>
+      <span class="k">🚑</span><span><b>${c.injuryPct}%</b> resulted in injury</span>
+    </div>
+    <div class="popup-note">Consider parallel low-stress routes where available.</div>`);
+  layers.corridors.addLayer(line);
+});
+
+/* ---------- Layer toggles ---------- */
+const checkboxes = document.querySelectorAll('input[data-layer]');
+function syncLayers() {
+  checkboxes.forEach(cb => {
+    const g = layers[cb.dataset.layer];
+    if (cb.checked) { if (!map.hasLayer(g)) map.addLayer(g); }
+    else if (map.hasLayer(g)) map.removeLayer(g);
+  });
+}
+checkboxes.forEach(cb => cb.addEventListener('change', syncLayers));
+syncLayers();
+
+/* ---------- Casual / Commuter mode presets ---------- */
+const MODES = {
+  casual:   { on: ['trail','protected','buffered','standard','sharrow','neighborhoods','parks','access','shops','food','landmarks'],
+              off: ['marta','crashBike','crashScooter','corridors'] },
+  commuter: { on: ['trail','protected','buffered','standard','neighborhoods','marta','crashBike','corridors','access'],
+              off: ['sharrow','parks','shops','food','landmarks','crashScooter'] }
+};
+function setMode(mode) {
+  document.getElementById('modeCasual').classList.toggle('active', mode === 'casual');
+  document.getElementById('modeCommuter').classList.toggle('active', mode === 'commuter');
+  checkboxes.forEach(cb => {
+    if (MODES[mode].on.includes(cb.dataset.layer)) cb.checked = true;
+    if (MODES[mode].off.includes(cb.dataset.layer)) cb.checked = false;
+  });
+  syncLayers();
+}
+document.getElementById('modeCasual').addEventListener('click', () => setMode('casual'));
+document.getElementById('modeCommuter').addEventListener('click', () => setMode('commuter'));
+
+/* ---------- Search: local names first, then Nominatim geocoding ---------- */
+const searchBox = document.getElementById('searchBox');
+const searchMsg = document.getElementById('searchMsg');
+function showMsg(t) { searchMsg.textContent = t; searchMsg.style.display = 'block'; setTimeout(() => searchMsg.style.display = 'none', 4000); }
+
+function localSearch(q) {
+  q = q.toLowerCase();
+  for (const n of NEIGHBORHOODS) {
+    if (n.name.toLowerCase().includes(q)) {
+      map.fitBounds(L.latLngBounds(n.coords).pad(0.15));
+      return n.name;
+    }
+  }
+  for (const cat of Object.keys(POIS)) {
+    for (const p of POIS[cat]) {
+      if (p.name.toLowerCase().includes(q)) {
+        map.setView([p.lat, p.lng], 16);
+        layers[cat].eachLayer(l => { if (l.options && l.options.title === p.name) l.openPopup(); });
+        return p.name;
+      }
+    }
+  }
+  for (const r of ROUTES) {
+    if (r.name.toLowerCase().includes(q)) {
+      map.fitBounds(L.latLngBounds(r.coords).pad(0.2));
+      return r.name;
+    }
+  }
+  return null;
+}
+
+async function doSearch(q) {
+  if (!q.trim()) return;
+  const hit = localSearch(q.trim());
+  if (hit) { showMsg('Found: ' + hit); return; }
+  try {
+    const url = 'https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=us' +
+      '&viewbox=-84.55,33.65,-84.25,33.90&bounded=1&q=' + encodeURIComponent(q + ', Atlanta, GA');
+    const res = await fetch(url, { headers: { Accept: 'application/json' } });
+    const data = await res.json();
+    if (data && data.length) {
+      map.setView([+data[0].lat, +data[0].lon], 16);
+      showMsg('Found: ' + data[0].display_name.split(',').slice(0, 2).join(','));
+    } else showMsg('No results for "' + q + '" in Atlanta.');
+  } catch (e) { showMsg('Geocoder unavailable — try a neighborhood or place name.'); }
+}
+searchBox.addEventListener('keydown', e => { if (e.key === 'Enter') doSearch(searchBox.value); });
+
+/* ---------- Sidebar & legend on mobile ---------- */
+document.getElementById('sidebarToggle').addEventListener('click', () =>
+  document.getElementById('sidebar').classList.toggle('open'));
+document.getElementById('legendToggle').addEventListener('click', function () {
+  const lg = document.getElementById('legend');
+  lg.classList.toggle('open');
+  this.textContent = lg.classList.contains('open') ? 'hide' : 'show';
+});
+map.on('click', () => document.getElementById('sidebar').classList.remove('open'));
+
+/* =====================================================================
+   TREND CHART — single series (no legend needed; the title names it),
+   thin bars with 4px rounded data-ends on the baseline, hairline grid,
+   hover tooltip per bar, direct label on the latest bar only.
+   ===================================================================== */
+(function renderTrend() {
+  const W = 272, H = 130, padL = 30, padR = 6, padT = 16, padB = 20;
+  const plotW = W - padL - padR, plotH = H - padT - padB;
+  const max = 200; // fixed round-number scale above the 171 peak
+  const n = STATS.years.length;
+  const barW = 18, step = plotW / n;
+  const y = v => padT + plotH * (1 - v / max);
+  const svgNS = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(svgNS, 'svg');
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  svg.style.display = 'block';
+
+  // hairline gridlines + y ticks at 0/100/200
+  [0, 100, 200].forEach(v => {
+    const ln = document.createElementNS(svgNS, 'line');
+    ln.setAttribute('x1', padL); ln.setAttribute('x2', W - padR);
+    ln.setAttribute('y1', y(v)); ln.setAttribute('y2', y(v));
+    ln.setAttribute('stroke', v === 0 ? getCss('--baseline') : getCss('--gridline'));
+    ln.setAttribute('stroke-width', 1);
+    svg.appendChild(ln);
+    const t = document.createElementNS(svgNS, 'text');
+    t.setAttribute('x', padL - 5); t.setAttribute('y', y(v) + 3.5);
+    t.setAttribute('text-anchor', 'end'); t.setAttribute('font-size', '9.5');
+    t.setAttribute('fill', getCss('--text-muted'));
+    t.setAttribute('style', 'font-variant-numeric: tabular-nums');
+    t.textContent = v;
+    svg.appendChild(t);
+  });
+
+  const tip = document.getElementById('chartTip');
+  STATS.years.forEach((yr, i) => {
+    const v = STATS.bikeCrashes[i];
+    const x = padL + step * i + (step - barW) / 2;
+    const barH = plotH * v / max;
+    const p = document.createElementNS(svgNS, 'path');
+    // rounded top (4px), square bottom anchored on the baseline
+    p.setAttribute('d', `M${x},${y(0)} L${x},${y(v) + 4} Q${x},${y(v)} ${x + 4},${y(v)} L${x + barW - 4},${y(v)} Q${x + barW},${y(v)} ${x + barW},${y(v) + 4} L${x + barW},${y(0)} Z`);
+    p.setAttribute('fill', getCss('--series-1'));
+    p.style.cursor = 'default';
+    p.addEventListener('mousemove', e => {
+      tip.innerHTML = `${yr}: <b>${v}</b> bike crashes`;
+      tip.style.display = 'block';
+      tip.style.left = (e.clientX + 12) + 'px';
+      tip.style.top = (e.clientY - 10) + 'px';
+    });
+    p.addEventListener('mouseleave', () => tip.style.display = 'none');
+    svg.appendChild(p);
+
+    // x label
+    const t = document.createElementNS(svgNS, 'text');
+    t.setAttribute('x', x + barW / 2); t.setAttribute('y', H - 6);
+    t.setAttribute('text-anchor', 'middle'); t.setAttribute('font-size', '9.5');
+    t.setAttribute('fill', getCss('--text-muted'));
+    t.setAttribute('style', 'font-variant-numeric: tabular-nums');
+    t.textContent = "'" + String(yr).slice(2);
+    svg.appendChild(t);
+
+    // direct label on the latest bar only
+    if (i === n - 1) {
+      const dl = document.createElementNS(svgNS, 'text');
+      dl.setAttribute('x', x + barW / 2); dl.setAttribute('y', y(v) - 4);
+      dl.setAttribute('text-anchor', 'middle'); dl.setAttribute('font-size', '10');
+      dl.setAttribute('font-weight', '600'); dl.setAttribute('fill', getCss('--text-primary'));
+      dl.textContent = v;
+      svg.appendChild(dl);
+    }
+  });
+  document.getElementById('trendChart').appendChild(svg);
+})();
+</script>
+</body>
+</html>
