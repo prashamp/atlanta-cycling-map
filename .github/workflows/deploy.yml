@@ -47,7 +47,9 @@ jobs:
           node-version: 20
 
       - name: Fetch official infrastructure + neighborhood data
-        run: node scripts/fetch-data.mjs
+        # --soft: if one source is temporarily unavailable, still deploy with the
+        # rest (the map falls back to sample data for any missing layer).
+        run: node scripts/fetch-data.mjs --soft
 
       - name: (optional) Fetch FARS fatal-crash data
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.fars }}

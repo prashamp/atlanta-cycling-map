@@ -45,8 +45,15 @@ import { fileURLToPath } from 'node:url';
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
 const SOURCES = {
-  bikeRoutes:
-    'https://gis.atlantaga.gov/dpcd/rest/services/OpenDataService/FeatureServer/30/query',
+  // Bike facilities aren't at a stable layer id across service revisions, so we
+  // DISCOVER the layer by name inside these service catalogs (first match wins).
+  bikeServiceCatalogs: [
+    'https://gis.atlantaga.gov/dpcd/rest/services/OpenDataService/FeatureServer',
+    'https://gis.atlantaga.gov/dpcd/rest/services/OpenDataService1/MapServer',
+    'https://gis.atlantaga.gov/dpcd/rest/services/Transportation/MapServer'
+  ],
+  bikeNameRe: /bicycle|bike\s*(lane|route|facilit|network)/i,
+  bikeExcludeRe: /parking|rack|share|shop|station|repair|count/i,
   neighborhoods:
     'https://gis.atlantaga.gov/dpcd/rest/services/AdministrativeArea/GeopoliticalArea/MapServer/1/query',
   fars: 'https://crashviewer.nhtsa.dot.gov/CrashAPI'
@@ -292,6 +299,25 @@ async function getJSON(url) {
   return res.json();
 }
 
+// Scan ArcGIS service catalogs for a layer whose name matches nameRe (and does
+// not match excludeRe). Returns a ready-to-query URL, or null if none found.
+async function discoverLayer(catalogs, nameRe, excludeRe) {
+  for (const svc of catalogs) {
+    let dir;
+    try { dir = await getJSON(`${svc}?f=json`); }
+    catch (e) { console.log(`  catalog ${svc} → ${e.message}`); continue; }
+    const layers = [...(dir.layers || []), ...(dir.tables || [])];
+    const match = layers.find(l => l.name && nameRe.test(l.name) && !(excludeRe && excludeRe.test(l.name)));
+    if (match) {
+      console.log(`  discovered "${match.name}" (id ${match.id}) in ${svc}`);
+      return `${svc}/${match.id}/query`;
+    }
+    if (layers.length)
+      console.log(`  no bike layer in ${svc.split('/services/')[1]} — saw: ${layers.map(l => l.name).slice(0, 12).join(', ')}`);
+  }
+  return null;
+}
+
 async function fetchArcGISAll(baseUrl) {
   const features = [];
   const pageSize = 1000;
@@ -324,9 +350,15 @@ function writeDataFile(outDir, name, banner, assignments) {
 
 /* ============================== pipelines ============================== */
 
-async function pipelineInfrastructure(outDir) {
-  console.log('▶ Bike infrastructure — City of Atlanta GIS (Bicycle Routes layer)');
-  const feats = await fetchArcGISAll(SOURCES.bikeRoutes);
+async function pipelineInfrastructure(outDir, infraUrlOverride) {
+  console.log('▶ Bike infrastructure — City of Atlanta GIS (auto-discovering bike layer)');
+  const queryUrl = infraUrlOverride ||
+    await discoverLayer(SOURCES.bikeServiceCatalogs, SOURCES.bikeNameRe, SOURCES.bikeExcludeRe);
+  if (!queryUrl) throw new Error(
+    'could not find a bicycle layer in the known service catalogs — ' +
+    'pass --infra-url "<FeatureServer/<id>/query>" once you locate it (see logs above for available layers)');
+  console.log(`  querying ${queryUrl}`);
+  const feats = await fetchArcGISAll(queryUrl);
   if (!feats.length) throw new Error('layer returned no features');
   const props0 = feats.find(f => f.properties)?.properties || {};
   const typeField = pickField(props0, [/facilit/i, /bike.*type|type.*bike/i, /^type$/i, /class/i]);
@@ -508,6 +540,8 @@ function parseArgs(argv) {
     else if (v === '--map') for (const kv of argv[++i].split(',')) { const [k, c] = kv.split('='); a.map[k.trim()] = c.trim(); }
     else if (v === '--assume-bike') a.assumeBike = true;
     else if (v === '--fars') a.fars = true;
+    else if (v === '--infra-url') a.infraUrl = argv[++i];
+    else if (v === '--soft') a.soft = true;
     else if (v === '--skip-infra') a.skipInfra = true;
     else if (v === '--skip-neighborhoods') a.skipNb = true;
     else if (v === '--selftest') a.selftest = true;
@@ -529,13 +563,14 @@ if (isMain) {
         try { await fn(); }
         catch (e) { failures++; console.error(`✖ ${what} failed: ${e.message}`); }
       };
-      await step(args.skipInfra, () => pipelineInfrastructure(args.out), 'infrastructure');
+      await step(args.skipInfra, () => pipelineInfrastructure(args.out, args.infraUrl), 'infrastructure');
       await step(args.skipNb, () => pipelineNeighborhoods(args.out), 'neighborhoods');
       if (args.gdotCsv) await step(false, () => pipelineGdotCsv(args.out, args.gdotCsv, args.years, args.map, args.assumeBike), 'GDOT CSV');
       else if (args.fars) await step(false, () => pipelineFars(args.out, args.years), 'FARS');
       else console.log('ℹ No crash source given — pass --gdot-csv <file> (best) or --fars (fatalities only).');
-      console.log(failures ? `\nDone with ${failures} failure(s).` : '\nDone. Open index.html — the map now uses the generated data. Commit data/ and push to update the live site.');
-      process.exit(failures ? 1 : 0);
+      if (failures && args.soft) console.log(`\nDone with ${failures} failure(s) — continuing anyway (--soft). The map falls back to samples for any layer that failed.`);
+      else console.log(failures ? `\nDone with ${failures} failure(s).` : '\nDone. Open index.html — the map now uses the generated data. Commit data/ and push to update the live site.');
+      process.exit(failures && !args.soft ? 1 : 0);
     })();
   }
 }
