@@ -54,6 +54,11 @@ const SOURCES = {
   ],
   bikeNameRe: /bicycle|bike|cycl/i,
   bikeExcludeRe: /parking|rack|share|shop|station|repair|count|signal|\bped/i,
+  // ARC Regional Bikeway Inventory — metro-wide facilities (suburbs included).
+  // Rows located in the City of Atlanta are dropped in favor of the richer city layer.
+  arcRegionalCatalogs: [
+    'https://services.arcgis.com/0L95CJ0VTaxqcmED/arcgis/rest/services/TRANSPORTATION_bicycle_facilities/FeatureServer'
+  ],
   neighborhoods:
     'https://gis.atlantaga.gov/dpcd/rest/services/AdministrativeArea/GeopoliticalArea/MapServer/1/query',
   fars: 'https://crashviewer.nhtsa.dot.gov/CrashAPI'
@@ -101,10 +106,19 @@ export function pickField(sampleProps, regexes, excludeRe) {
   return null;
 }
 
-// GeoJSON geometry -> array of [lat,lng] lines
-export function geomToLines(geometry) {
+// GeoJSON geometry -> array of [lat,lng] lines, decimated to <= maxPts each
+// (region-wide layers carry very dense vertices; ~150 pts is visually identical
+// at city scale and keeps the data file small).
+export function geomToLines(geometry, maxPts = 150) {
   if (!geometry) return [];
-  const flip = pts => pts.map(([lng, lat]) => [round5(lat), round5(lng)]);
+  const flip = pts => {
+    const step = Math.max(1, Math.ceil(pts.length / maxPts));
+    const out = pts.filter((_, i) => i % step === 0).map(([lng, lat]) => [round5(lat), round5(lng)]);
+    const last = pts[pts.length - 1];
+    const tail = out[out.length - 1];
+    if (tail[0] !== round5(last[1]) || tail[1] !== round5(last[0])) out.push([round5(last[1]), round5(last[0])]);
+    return out;
+  };
   if (geometry.type === 'LineString') return [flip(geometry.coordinates)];
   if (geometry.type === 'MultiLineString') return geometry.coordinates.map(flip);
   return [];
@@ -376,31 +390,29 @@ function writeDataFile(outDir, name, banner, assignments) {
 
 /* ============================== pipelines ============================== */
 
-async function pipelineInfrastructure(outDir, infraUrlOverride) {
-  console.log('▶ Bike infrastructure — City of Atlanta GIS (auto-discovering bike layer)');
-  const queryUrl = infraUrlOverride ||
-    await discoverLayer(SOURCES.bikeServiceCatalogs, SOURCES.bikeNameRe, SOURCES.bikeExcludeRe);
-  if (!queryUrl) throw new Error(
-    'could not find a bicycle layer in the known service catalogs — ' +
-    'pass --infra-url "<FeatureServer/<id>/query>" once you locate it (see logs above for available layers)');
-  console.log(`  querying ${queryUrl}`);
+// Fetch one bike-facility layer and convert its features to route objects.
+async function routesFromLayer(queryUrl, { note, dropCityAtlanta = false } = {}) {
   const feats = await fetchArcGISAll(queryUrl);
   if (!feats.length) throw new Error('layer returned no features');
   const props0 = feats.find(f => f.properties)?.properties || {};
   const NO_ID = /(^|_)(object)?id$|^fid$/i;   // never pick OBJECTID / FACILITYID / *_ID as a value field
   const typeField = pickField(props0,
-    [/fac.*type|type.*fac/i, /bike.*type|type.*bike/i, /lane.*type|type.*lane/i, /^type$/i, /class$/i, /category/i, /^facility$/i, /status/i],
+    [/fac.*type|type.*fac/i, /bike.*type|type.*bike/i, /lane.*type|type.*lane/i, /spec/i, /^type$/i, /class$/i, /category/i, /^facility$/i, /status/i],
     NO_ID);
   const nameField = pickField(props0,
-    [/st_?name|street.*name|name.*street/i, /road.*name|name.*road/i, /^street$/i, /^road$/i, /route.*name/i, /^name$/i, /corridor/i, /label/i],
+    [/st_?name|street.*name|name.*street/i, /road.*name|name.*road/i, /^street$/i, /^road$/i, /route.*name/i, /fac.*name|name.*fac/i, /^name$/i, /corridor/i, /label/i],
     NO_ID);
+  const cityField = dropCityAtlanta ? pickField(props0, [/^city/i, /city.*(name|loc)/i, /jurisdiction/i], NO_ID) : null;
   console.log(`  fields available: ${Object.keys(props0).join(', ')}`);
-  console.log(`  detected fields → type: ${typeField ?? '(none)'} · name: ${nameField ?? '(none)'}`);
+  console.log(`  detected fields → type: ${typeField ?? '(none)'} · name: ${nameField ?? '(none)'}` +
+    (dropCityAtlanta ? ` · city: ${cityField ?? '(none)'}` : ''));
 
   const seenTypes = new Map();
   const routes = [];
+  let droppedCity = 0;
   for (const f of feats) {
     const p = f.properties || {};
+    if (cityField && /^atlanta$/i.test(String(p[cityField] || '').trim())) { droppedCity++; continue; }
     const rawType = typeField ? p[typeField] : null;
     seenTypes.set(rawType, (seenTypes.get(rawType) || 0) + 1);
     const type = classifyFacility(rawType) || 'standard';
@@ -411,18 +423,49 @@ async function pipelineInfrastructure(outDir, infraUrlOverride) {
         type, coords,
         surface: inferSurface(type),
         marta: nearestMarta(coords),
-        closures: '—'
+        closures: '—',
+        ...(note ? { note } : {})
       });
     }
   }
-  if (!routes.length) throw new Error(
-    `layer produced 0 line features (likely a point layer or wrong field) — ` +
-    `pass --infra-url to target the correct polyline layer`);
+  if (droppedCity) console.log(`  dropped ${droppedCity} City-of-Atlanta rows (covered by the city layer)`);
   console.log('  facility-type values seen:');
   for (const [v, n] of [...seenTypes].sort((a, b) => b[1] - a[1]))
     console.log(`    ${String(v)} × ${n} → ${classifyFacility(v) || 'standard (unmapped!)'}`);
+  return routes;
+}
+
+async function pipelineInfrastructure(outDir, infraUrlOverride) {
+  console.log('▶ Bike infrastructure — City of Atlanta GIS (auto-discovering bike layer)');
+  const cityUrl = infraUrlOverride ||
+    await discoverLayer(SOURCES.bikeServiceCatalogs, SOURCES.bikeNameRe, SOURCES.bikeExcludeRe);
+  if (!cityUrl) throw new Error(
+    'could not find a bicycle layer in the known service catalogs — ' +
+    'pass --infra-url "<FeatureServer/<id>/query>" once you locate it (see logs above for available layers)');
+  console.log(`  querying ${cityUrl}`);
+  const routes = await routesFromLayer(cityUrl);
+  if (!routes.length) throw new Error(
+    `city layer produced 0 line features (likely a point layer or wrong field) — ` +
+    `pass --infra-url to target the correct polyline layer`);
+
+  // Metro-wide facilities from the ARC Regional Bikeway Inventory (suburbs).
+  console.log('▶ Bike infrastructure — ARC Regional Bikeway Inventory (metro/suburbs)');
+  try {
+    const arcUrl = await discoverLayer(SOURCES.arcRegionalCatalogs, /./, null);
+    if (!arcUrl) throw new Error('no layer found in ARC service');
+    console.log(`  querying ${arcUrl}`);
+    const regional = await routesFromLayer(arcUrl, {
+      note: 'Regional inventory (ARC) — outside the City of Atlanta',
+      dropCityAtlanta: true
+    });
+    console.log(`  ${regional.length} regional segments added to ${routes.length} city segments`);
+    routes.push(...regional);
+  } catch (e) {
+    console.warn(`  ⚠ regional layer skipped: ${e.message} (city coverage still complete)`);
+  }
+
   writeDataFile(outDir, 'infrastructure.js',
-    'Source: City of Atlanta DPCD GIS — OpenDataService/FeatureServer/30 (Bicycle Routes)',
+    'Sources: City of Atlanta DPCD GIS (Bicycle Routes) + ARC Regional Bikeway Inventory (metro)',
     [['routes', routes]]);
 }
 
