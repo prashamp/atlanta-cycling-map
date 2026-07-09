@@ -83,15 +83,6 @@ Column names auto-detect; `--map` overrides them, `--assume-bike` covers
 exports pre-filtered to bikes. `node scripts/fetch-data.mjs --selftest` runs
 the offline test suite (40+ checks). `--help` lists everything.
 
-## Hosting / custom domain
-
-The site is fully static, so hosting is free on GitHub Pages (current setup).
-To publish it as an independent website: buy a domain (~$10/yr at Cloudflare,
-Porkbun, or Namecheap), point a CNAME record at
-`prashallcommit.github.io`, add the domain in **Settings → Pages → Custom
-domain**, and commit the generated `CNAME` file. HTTPS is automatic. Netlify
-and Cloudflare Pages free tiers work identically if preferred.
-
 ## Stack
 
 One HTML file (Leaflet 1.9.4 vendored, canvas rendering for the ~10k-segment
