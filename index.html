@@ -50,8 +50,8 @@
     padding: 3px 0; cursor: pointer; user-select: none;
   }
   label.toggle input { accent-color: var(--series-1); margin: 0; }
-  .swatch { width: 22px; height: 0; border-top-width: 4px; border-top-style: solid; border-radius: 2px; flex: none; }
-  .swatch.thick { border-top-width: 6px; }
+  .swatch { width: 22px; height: 0; border-top-width: 3px; border-top-style: solid; border-radius: 2px; flex: none; }
+  .swatch.thick { border-top-width: 5px; }
   .swatch.dashed { border-top-style: dashed; border-top-width: 3px; }
   .swatch.dotted { border-top-style: dotted; border-top-width: 3px; }
   .chip { width: 18px; height: 18px; border-radius: 50%; display: inline-flex;
@@ -104,6 +104,18 @@
     position: absolute; top: 44px; left: 0; right: 0; background: #fff; border: 1px solid var(--gridline);
     border-radius: 8px; padding: 6px 10px; font-size: 12px; color: var(--text-secondary); display: none;
   }
+
+  /* Basemap switcher (below zoom control) */
+  #baseSwitch {
+    position: absolute; top: 86px; right: 12px; z-index: 1000;
+    display: flex; border-radius: 8px; overflow: hidden;
+    border: 1px solid var(--gridline); box-shadow: 0 2px 8px rgba(11,11,11,0.12);
+  }
+  #baseSwitch button {
+    padding: 6px 11px; font-size: 12px; border: 0; background: #fff;
+    cursor: pointer; color: var(--text-secondary); font-family: inherit;
+  }
+  #baseSwitch button.active { background: var(--series-1); color: #fff; font-weight: 600; }
 
   /* Legend (bottom-left) */
   #legend {
@@ -227,6 +239,10 @@
 </aside>
 
 <div id="map">
+  <div id="baseSwitch">
+    <button id="baseLightBtn" class="active">Map</button>
+    <button id="baseSatBtn">Satellite</button>
+  </div>
   <div id="searchWrap">
     <input id="searchBox" type="search" placeholder="Search address, neighborhood, or place…" aria-label="Search">
     <div id="searchMsg"></div>
@@ -540,17 +556,29 @@ const REAL_SAFETY = CRASHES !== SAMPLE_CRASHES;
 const map = L.map('map', { zoomControl: false }).setView([33.7650, -84.3800], 13);
 L.control.zoom({ position: 'topright' }).addTo(map);
 
-L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+const baseLight = L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
   attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>',
   subdomains: 'abcd', maxZoom: 19
 }).addTo(map);
+const baseSat = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+  attribution: 'Tiles &copy; Esri &mdash; Source: Esri, Maxar, Earthstar Geographics, and the GIS User Community',
+  maxZoom: 19
+});
+function setBasemap(sat) {
+  if (sat) { map.removeLayer(baseLight); baseSat.addTo(map); }
+  else { map.removeLayer(baseSat); baseLight.addTo(map); }
+  document.getElementById('baseLightBtn').classList.toggle('active', !sat);
+  document.getElementById('baseSatBtn').classList.toggle('active', sat);
+}
+document.getElementById('baseLightBtn').addEventListener('click', () => setBasemap(false));
+document.getElementById('baseSatBtn').addEventListener('click', () => setBasemap(true));
 
 const LANE_STYLE = {
-  trail:     { weight: 6, opacity: 0.9 },
-  protected: { weight: 4, opacity: 0.9 },
-  buffered:  { weight: 4, opacity: 0.9 },
-  standard:  { weight: 4, opacity: 0.9 },
-  sharrow:   { weight: 3, opacity: 0.9, dashArray: '6 9' }
+  trail:     { weight: 4,   opacity: 0.85 },
+  protected: { weight: 2.5, opacity: 0.9 },
+  buffered:  { weight: 2.5, opacity: 0.9 },
+  standard:  { weight: 2.5, opacity: 0.9 },
+  sharrow:   { weight: 2,   opacity: 0.85, dashArray: '5 7' }
 };
 const LANE_COLOR = {
   trail: getCss('--lane-trail'), protected: getCss('--lane-protected'),
@@ -597,7 +625,7 @@ ROUTES.forEach(r => {
     </div>
     ${r.note ? `<div class="popup-note">${esc(r.note)}</div>` : ''}`;
   hit.bindPopup(popup, { maxWidth: 290 });
-  hit.on('mouseover', () => line.setStyle({ weight: style.weight + 3 }));
+  hit.on('mouseover', () => line.setStyle({ weight: style.weight + 2 }));
   hit.on('mouseout',  () => line.setStyle({ weight: style.weight }));
   layers[type].addLayer(line);
   layers[type].addLayer(hit);
@@ -656,7 +684,7 @@ CRASHES.forEach(c => {
 });
 
 CORRIDORS.forEach(c => {
-  const line = L.polyline(c.coords, { color: RISK_COLOR.high, weight: 11, opacity: 0.30 });
+  const line = L.polyline(c.coords, { color: RISK_COLOR.high, weight: 8, opacity: 0.30 });
   line.bindPopup(`
     <h4>⚠️ ${esc(c.name)} — high-crash corridor</h4>
     <div class="popup-grid">
@@ -785,6 +813,9 @@ map.on('click', () => document.getElementById('sidebar').classList.remove('open'
   } else if (REAL_INFRA) {
     dj.innerHTML = `✅ Bike infrastructure is the <b>official City of Atlanta GIS layer</b>. ` +
       `⚠️ Safety figures are still <b>illustrative samples</b> — run scripts/fetch-data.mjs with a GDOT export (see README).`;
+  } else if (REAL_SAFETY) {
+    dj.innerHTML = `✅ Safety data is from <b>${esc((D.stats && D.stats.source) || 'a GDOT export')}</b>. ` +
+      `⚠️ Routes shown are still <b>simplified samples</b> — run scripts/fetch-data.mjs to load the official GIS network.`;
   } else {
     dj.innerHTML = `⚠️ Routes and safety figures are <b>illustrative sample data</b> — not official statistics. ` +
       `Run <b>node scripts/fetch-data.mjs</b> to load the City of Atlanta GIS layers and real crash data (see README).`;

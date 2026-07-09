@@ -22,9 +22,10 @@ on:
         type: boolean
         default: false
 
-# Least-privilege token scoped for Pages deployment.
+# contents: write lets the workflow commit refreshed data/ files back to the
+# repo (so local clones also get real data); pages/id-token for deployment.
 permissions:
-  contents: read
+  contents: write
   pages: write
   id-token: write
 
@@ -58,6 +59,22 @@ jobs:
             echo "data/safety.js already committed — leaving it as-is."
           else
             node scripts/fetch-data.mjs --skip-infra --skip-neighborhoods --fars
+          fi
+
+      - name: Commit refreshed data back to the repo
+        # Keeps the repo's data/ in sync with what the site serves, so anyone
+        # cloning the repo (or opening index.html locally) sees real data too.
+        # "[skip ci]" prevents this bot commit from re-triggering the workflow.
+        run: |
+          if git status --porcelain -- data | grep -q .; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add data
+            git commit -m "chore: refresh generated data [skip ci]"
+            git pull --rebase origin main || true
+            git push origin HEAD:main
+          else
+            echo "data/ unchanged — nothing to commit"
           fi
 
       - name: Assemble site
