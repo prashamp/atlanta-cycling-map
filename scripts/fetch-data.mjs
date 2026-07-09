@@ -294,7 +294,14 @@ export function aggregateSafety(rows, col, years, { assumeBike = false, source =
 /* ============================ fetch helpers ============================ */
 
 async function getJSON(url) {
-  const res = await fetch(url, { headers: { Accept: 'application/json' } });
+  // Some government APIs (e.g. NHTSA) reject requests without a browser-like
+  // User-Agent; identify ourselves politely.
+  const res = await fetch(url, {
+    headers: {
+      Accept: 'application/json',
+      'User-Agent': 'Mozilla/5.0 (compatible; atlanta-cycling-map-pipeline/1.0; +https://github.com/prashamp/atlanta-cycling-map)'
+    }
+  });
   if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
   return res.json();
 }
