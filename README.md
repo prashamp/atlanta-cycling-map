@@ -1,97 +1,89 @@
 # 🚲 Atlanta Cycling Map
 
-An interactive, mobile-responsive map of Atlanta, GA focused on cycling — bike
-infrastructure, neighborhood boundaries, destinations, rider-helpful route info,
-and a toggleable crash-safety layer.
+**Live map: https://prashallcommit.github.io/atlanta-cycling-map/**
 
-**To use it:** open `index.html` in any browser (needs internet access for the
-basemap tiles and address geocoding — everything else is embedded in the file).
+An interactive, mobile-friendly map of cycling in metro Atlanta — every bike
+lane and trail across the region, neighborhood boundaries, bike shops and
+destinations, and a real crash-safety layer. Built as a public resource:
+viewers just open the link; all data loads automatically.
 
 ## Features
 
-| Feature | Where |
+### 🛣️ Bike infrastructure — the whole metro
+- **City of Atlanta:** the official [DPCD GIS Bicycle Routes layer](https://gis.atlantaga.gov/dpcd/rest/services/OpenDataService1/MapServer/30)
+  (~290 facilities on true road geometry).
+- **Suburbs / region:** the [ARC Regional Bikeway Inventory](https://opendata.atlantaregional.com/datasets/regional-bikeway-inventory-2022)
+  (~10k+ built facilities across the metro; recommended-but-unbuilt segments are filtered out).
+- Color-coded by type: **multi-use trails** (purple), **protected lanes**
+  (green), **buffered lanes** (blue), **standard lanes** (orange), **sharrows /
+  shared roadway** (slate, dashed — includes wide curb lanes and rideable shoulders).
+- Click any route for surface, nearest MARTA stations, and a construction/closures field.
+
+### 🚨 Safety layer (real data)
+- **764 bicycle crashes (2021–2025)** from a GDOT/Atlanta Police crash-data
+  export (`data/source/`), aggregated into risk-graded hotspot clusters and
+  top-5 high-crash corridors.
+- Sidebar stat panel: crashes per year (trend chart), injury rate, worst corridors.
+
+### 📍 Getting around
+- **Map / Satellite** basemap switcher (CARTO light + Esri World Imagery).
+- **GPS locate button** — see yourself on the map while riding.
+- Search bar: neighborhoods, places, and street addresses (Nominatim).
+- **Casual ride / Commuter** presets that flip layer combinations.
+- Official **neighborhood boundaries** (248 polygons; labels appear as you zoom).
+
+### 🔧 Places
+- **Bike shops metro-wide from OpenStreetMap** — with phone numbers and
+  websites where OSM has them.
+- Parks, BeltLine access points, trailside cafes & breweries, landmarks, and
+  MARTA stations — every point has an **"Open in Google Maps"** link.
+
+## How it stays up to date (zero effort)
+
+A GitHub Actions workflow (`.github/workflows/deploy.yml`) runs on every push
+and **monthly on a schedule**. It:
+1. Fetches the City of Atlanta GIS layers, the ARC regional inventory, and
+   OpenStreetMap bike shops (auto-discovering layer ids and field names,
+   logging every facility-type value it classifies).
+2. Commits the refreshed `data/*.js` files back to the repo.
+3. Assembles and deploys the site to GitHub Pages.
+
+If a source is temporarily down, the deploy proceeds with the rest (`--soft`)
+and the map notes what's missing rather than breaking.
+
+## Data honesty
+
+| Layer | Status |
 |---|---|
-| Bike infrastructure, color-coded by type (protected / buffered / standard / trails / sharrows) | Map lines + sidebar toggles |
-| Neighborhood boundaries with subtle labels | Dotted gray overlays |
-| Parks, BeltLine access points, bike shops/rentals, cafes & breweries, landmarks, MARTA stations | Emoji pin markers, each toggleable |
-| Safety layer: crash hotspots (bike and e-scooter, separately toggleable) + high-crash corridors | Risk-graded circle markers and translucent red corridor bands |
-| Stat panel: annual crashes, injury %, top-5 corridors, 5-year trend chart | Sidebar |
-| Rider info popups: surface, hilliness, lighting, MARTA connections, construction/closures | Click any route |
-| Casual ↔ Commuter mode presets | Sidebar switch |
-| Search (local place names first, then address geocoding via Nominatim) | Top search bar |
-| Legend | Bottom-left (collapsible on mobile) |
+| Bike infrastructure (city + metro) | ✅ Official GIS, auto-refreshed |
+| Neighborhoods | ✅ Official city boundaries, auto-refreshed |
+| Crash data | ✅ Real GDOT/APD export (2021–2025), committed in `data/` |
+| Bike shops | ✅ OpenStreetMap, auto-refreshed |
+| Lighting / hilliness | ❌ No official source publishes these — shown only on the few hand-annotated sample routes, omitted elsewhere |
+| Construction/closures | Placeholder field for manual updates |
 
-## Design decisions (defaults chosen — easy to change)
+Notes: FARS (NHTSA) fatal-crash fetching exists (`--fars`) but NHTSA blocks
+GitHub's runner IPs, so run it locally if wanted. Relay Bike Share shut down
+in 2020; dockless e-bikes/scooters are the current shared option.
 
-These four questions were asked but couldn't be answered before build, so the
-recommended defaults were used:
+## Updating the crash data
 
-1. **Crash data window: 2021–2025 (5 years)** — enough volume for corridor
-   patterns and a year-over-year trend.
-2. **E-scooter crashes: included**, as a separate toggle (never merged into
-   bike stats), since scooters share the same infrastructure in Atlanta.
-3. **Palette: the spec colors as-is** — green/blue/orange/purple/gray lanes on a
-   light-gray CARTO basemap; the risk scale uses a reserved yellow/salmon/red
-   status palette.
-4. **Audience: both, casual-first** — the default "Casual ride" preset surfaces
-   trails and destinations; the "Commuter" preset switches on MARTA stations,
-   the safety layer, and hides sharrows/food in favor of directness.
-
-## Loading real data (official sources)
-
-The map ships with embedded **sample data** so it works out of the box. To
-replace it with the real thing, run the bundled pipeline on any machine with
-Node 18+ and open internet:
+GDOT's portal (free account at https://gdot.numetric.net/) → filter to
+bicyclist/e-scooter crashes in Atlanta → export CSV → then:
 
 ```bash
-# 1. Official bike infrastructure + neighborhood boundaries (no account needed)
-node scripts/fetch-data.mjs
-
-# 2. Real crash data — download a CSV export first (see below), then:
-node scripts/fetch-data.mjs --gdot-csv ~/Downloads/atlanta-bike-crashes.csv
-
-# 3. Commit the generated files and push — the live site updates automatically
-git add data/ && git commit -m "Load official data" && git push
+node scripts/fetch-data.mjs --gdot-csv your-export.csv --years 2021-2025 \
+  --map "street=Roadway (From Crash Report)" --assume-bike \
+  --skip-infra --skip-neighborhoods --skip-shops
+git add data/ && git commit -m "Update crash data" && git push
 ```
 
-The script writes `data/infrastructure.js`, `data/neighborhoods.js`, and
-`data/safety.js`. `index.html` auto-detects them and switches off the samples
-(the sidebar disclaimer flips from ⚠️ *sample data* to ✅ *official data*).
-Delete the files to fall back to samples. Run `node scripts/fetch-data.mjs
---selftest` to check the transform logic offline, `--help` for all options.
-
-### Where the data comes from
-
-| Layer | Source | Access |
-|---|---|---|
-| Bike infrastructure | City of Atlanta DPCD GIS — [Bicycle Routes layer](https://gis.atlantaga.gov/dpcd/rest/services/OpenDataService/FeatureServer/30) (true road geometries with facility type: protected / buffered / lane / path / sharrow) | automatic |
-| Neighborhoods | City of Atlanta DPCD GIS — [official Neighborhood boundaries](https://gis.atlantaga.gov/dpcd/rest/services/AdministrativeArea/GeopoliticalArea/MapServer/1) (~240 polygons; labels appear from zoom 13) | automatic |
-| Crashes (best) | [GDOT Crash Data Portal](https://gdot.numetric.net/) — free account required. Filter: *bicyclist or e-scooter involved*, *City of Atlanta*, your year range → export CSV → `--gdot-csv`. Column names are auto-detected; override with `--map "lat=...,lng=...,year=...,mode=...,severity=...,street=..."`. If your export is pre-filtered to bikes and has no person-type column, add `--assume-bike`. | manual export |
-| Crashes (supplement) | [NHTSA FARS CrashAPI](https://crashviewer.nhtsa.dot.gov/CrashAPI) via `--fars` — **fatalities only**, public API, no account. Run it **locally** (NHTSA 403-blocks GitHub Actions runner IPs, so the workflow's `fars` input usually fails); commit the generated `data/safety.js`. Not a substitute for the GDOT export. | local run |
-
-Atlanta Police Department crash records are not published as a machine-readable
-open dataset; GDOT's portal is the canonical source for all-severity crash data
-(APD reports feed into it).
-
-## ⚠️ About the built-in sample data
-
-- Sample **route geometries are simplified approximations** of real facilities —
-  good for orientation, not navigation. The pipeline replaces them with the
-  city's full official network.
-- Sample **safety figures are illustrative**, shaped to match published
-  reporting patterns (Moreland Ave and DeKalb Ave really do top Atlanta's
-  high-injury network) — **not official statistics**.
-- **Relay Bike Share ceased operations in 2020.** The map keeps one marker at a
-  former downtown hub as a note; dockless e-bikes/scooters (Lime, Bird) are the
-  current shared options.
-
-Each route also carries `surface`, `hills`, `lighting`, and a `closures`
-placeholder meant for manual updates as construction comes and goes; the city
-layer doesn't publish those attributes, so popups show honest "unknown"
-defaults until filled in.
+Column names auto-detect; `--map` overrides them, `--assume-bike` covers
+exports pre-filtered to bikes. `node scripts/fetch-data.mjs --selftest` runs
+the offline test suite (40+ checks). `--help` lists everything.
 
 ## Stack
 
-One HTML file plus a vendored copy of [Leaflet 1.9.4](https://leafletjs.com/)
-(`vendor/leaflet/`), CARTO Positron basemap tiles, OSM Nominatim for address
-search, hand-rolled SVG for the trend chart. No build step, no framework.
+One HTML file (Leaflet 1.9.4 vendored, canvas rendering for the ~10k-segment
+network, hand-rolled SVG chart), a zero-dependency Node ≥18 data pipeline, and
+a GitHub Actions deploy. No framework, no build step.

@@ -91,7 +91,7 @@ export function classifyFacility(raw) {
   if (/multi[\s-]?use|shared[\s-]?use|side\s?path|\bpath\b|\btrail\b|greenway|beltline|off[\s-]?(street|road)/.test(t)) return 'trail';
   if (/protect|cycle\s?track|separat|raised\s+bike\s+lane/.test(t)) return 'protected';
   if (/buffer/.test(t)) return 'buffered';
-  if (/sharrow|shared[\s-]?(lane|roadway|street)|bike\s?(blvd|boulevard)|neighborhood\s?(greenway|street)|signed/.test(t)) return 'sharrow';
+  if (/sharrow|shared[\s-]?(lane|roadway|street)|bike\s?(blvd|boulevard)|neighborhood\s?(greenway|street|bikeway)|signed|wide\s?curb|shoulder/.test(t)) return 'sharrow';
   if (/\blane\b/.test(t)) return 'standard';
   if (/route|connector/.test(t)) return 'sharrow';
   return null;
@@ -406,7 +406,7 @@ function writeDataFile(outDir, name, banner, assignments) {
 // Fetch one bike-facility layer and convert its features to route objects.
 // dropInsideRings: [lat,lng] rings (e.g. Atlanta city limits) — segments whose
 // midpoint falls inside are dropped (covered by the richer city layer).
-async function routesFromLayer(queryUrl, { note, dropCityAtlanta = false, dropInsideRings = null } = {}) {
+async function routesFromLayer(queryUrl, { note, dropCityAtlanta = false, dropInsideRings = null, requireType = false } = {}) {
   const feats = await fetchArcGISAll(queryUrl);
   if (!feats.length) throw new Error('layer returned no features');
   const props0 = feats.find(f => f.properties)?.properties || {};
@@ -439,6 +439,9 @@ async function routesFromLayer(queryUrl, { note, dropCityAtlanta = false, dropIn
       if (/programmed|planned|proposed|future|conceptual|recommend|vision|funded/i.test(sv)) { droppedPlanned++; continue; }
     }
     const rawType = typeField ? p[typeField] : null;
+    // requireType: rows with no facility value are recommended-network entries
+    // with nothing built on the ground — don't render them as real lanes.
+    if (requireType && (rawType == null || String(rawType).trim() === '')) { droppedPlanned++; continue; }
     const lines = geomToLines(f.geometry);
     if (dropInsideRings && lines.length) {
       const mid = lines[0][Math.floor(lines[0].length / 2)];
@@ -460,7 +463,7 @@ async function routesFromLayer(queryUrl, { note, dropCityAtlanta = false, dropIn
   }
   if (droppedCity) console.log(`  dropped ${droppedCity} City-of-Atlanta rows (covered by the city layer)`);
   if (droppedInside) console.log(`  dropped ${droppedInside} segments inside the city limits polygon (covered by the city layer)`);
-  if (droppedPlanned) console.log(`  dropped ${droppedPlanned} programmed/planned (not yet built) segments`);
+  if (droppedPlanned) console.log(`  dropped ${droppedPlanned} planned/recommended (no built facility) segments`);
   if (seenStatus.size) console.log('  status values seen:', [...seenStatus].map(([v, n]) => `${v}×${n}`).join(' | '));
   console.log('  facility-type values seen:');
   for (const [v, n] of [...seenTypes].sort((a, b) => b[1] - a[1]))
@@ -509,7 +512,8 @@ async function pipelineInfrastructure(outDir, infraUrlOverride) {
     const regional = await routesFromLayer(arcUrl, {
       note: 'Regional inventory (ARC) — outside the City of Atlanta',
       dropCityAtlanta: true,
-      dropInsideRings: cityRings
+      dropInsideRings: cityRings,
+      requireType: true
     });
     console.log(`  ${regional.length} regional segments added to ${routes.length} city segments`);
     routes.push(...regional);
@@ -520,6 +524,43 @@ async function pipelineInfrastructure(outDir, infraUrlOverride) {
   writeDataFile(outDir, 'infrastructure.js',
     'Sources: City of Atlanta DPCD GIS (Bicycle Routes) + ARC Regional Bikeway Inventory (metro)',
     [['routes', routes]]);
+}
+
+async function pipelineShops(outDir) {
+  console.log('▶ Bike shops — OpenStreetMap via Overpass API (metro-wide)');
+  const query = '[out:json][timeout:90];nwr["shop"="bicycle"](33.40,-84.85,34.20,-84.00);out center tags;';
+  const res = await fetch('https://overpass-api.de/api/interpreter', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      'User-Agent': 'Mozilla/5.0 (compatible; atlanta-cycling-map-pipeline/1.0; +https://github.com/prashallcommit/atlanta-cycling-map)'
+    },
+    body: 'data=' + encodeURIComponent(query)
+  });
+  if (!res.ok) throw new Error(`Overpass HTTP ${res.status}`);
+  const json = await res.json();
+  const shops = [];
+  for (const el of json.elements || []) {
+    const t = el.tags || {};
+    const lat = el.lat ?? el.center?.lat, lng = el.lon ?? el.center?.lon;
+    if (!t.name || !isFinite(lat) || !isFinite(lng)) continue;
+    const addr = [
+      t['addr:housenumber'] && t['addr:street'] ? `${t['addr:housenumber']} ${t['addr:street']}` : t['addr:street'] || null,
+      t['addr:city'] || null
+    ].filter(Boolean).join(', ');
+    shops.push({
+      name: t.name, lat: round5(lat), lng: round5(lng),
+      desc: addr || 'Bicycle shop',
+      ...(t.phone || t['contact:phone'] ? { phone: t.phone || t['contact:phone'] } : {}),
+      ...((t.website || t['contact:website']) && /^https?:\/\//i.test(t.website || t['contact:website'])
+        ? { website: t.website || t['contact:website'] } : {})
+    });
+  }
+  if (!shops.length) throw new Error('Overpass returned no bicycle shops');
+  console.log(`  ${shops.length} shops (${shops.filter(s => s.phone).length} with phone numbers)`);
+  writeDataFile(outDir, 'pois.js',
+    'Source: OpenStreetMap via Overpass API — shop=bicycle across the Atlanta metro',
+    [['shops', shops]]);
 }
 
 async function pipelineNeighborhoods(outDir) {
@@ -627,6 +668,11 @@ function selftest() {
   eq('pip inside', pointInRings([33.80, -84.40], sq), true);
   eq('pip outside', pointInRings([33.60, -84.40], sq), false);
   eq('pickField skips REC_', pickField({ REC_BICYCLE_FACILITY: 'x', BICYCLE_FACILITY: 'y' }, [/bicycle_?facility/i], /(^|_)(object)?id$|^fid$|^rec_/i), 'BICYCLE_FACILITY');
+  eq('classify wide curb', classifyFacility('Wide Curb Lane'), 'sharrow');
+  eq('classify shoulder', classifyFacility('Shoulder'), 'sharrow');
+  eq('classify nbhd bikeway', classifyFacility('Neighborhood Bikeway'), 'sharrow');
+  eq('classify protected one-way', classifyFacility('Bike Lane - Protected One-Way'), 'protected');
+  eq('classify trail unpaved', classifyFacility('Trail - Unpaved'), 'trail');
   eq('classify unknown', classifyFacility('Widget'), null);
   eq('surface trail', inferSurface('trail'), 'Paved (some interim unpaved segments possible)');
   eq('surface lane', inferSurface('standard'), 'Paved (asphalt)');
@@ -684,6 +730,7 @@ function parseArgs(argv) {
     else if (v === '--soft') a.soft = true;
     else if (v === '--skip-infra') a.skipInfra = true;
     else if (v === '--skip-neighborhoods') a.skipNb = true;
+    else if (v === '--skip-shops') a.skipShops = true;
     else if (v === '--selftest') a.selftest = true;
     else if (v === '--help' || v === '-h') { console.log(readFileSync(fileURLToPath(import.meta.url), 'utf8').split('*/')[0] + '*/'); process.exit(0); }
     else throw new Error(`unknown arg: ${v}`);
@@ -705,6 +752,7 @@ if (isMain) {
       };
       await step(args.skipInfra, () => pipelineInfrastructure(args.out, args.infraUrl), 'infrastructure');
       await step(args.skipNb, () => pipelineNeighborhoods(args.out), 'neighborhoods');
+      await step(args.skipShops, () => pipelineShops(args.out), 'bike shops');
       if (args.gdotCsv) await step(false, () => pipelineGdotCsv(args.out, args.gdotCsv, args.years, args.map, args.assumeBike), 'GDOT CSV');
       else if (args.fars) await step(false, () => pipelineFars(args.out, args.years), 'FARS');
       else console.log('ℹ No crash source given — pass --gdot-csv <file> (best) or --fars (fatalities only).');
