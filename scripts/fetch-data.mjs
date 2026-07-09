@@ -406,7 +406,7 @@ function writeDataFile(outDir, name, banner, assignments) {
 // Fetch one bike-facility layer and convert its features to route objects.
 // dropInsideRings: [lat,lng] rings (e.g. Atlanta city limits) — segments whose
 // midpoint falls inside are dropped (covered by the richer city layer).
-async function routesFromLayer(queryUrl, { note, dropCityAtlanta = false, dropInsideRings = null, requireType = false } = {}) {
+async function routesFromLayer(queryUrl, { note, dropCityAtlanta = false, dropInsideRings = null, requireType = false, forceType = null } = {}) {
   const feats = await fetchArcGISAll(queryUrl);
   if (!feats.length) throw new Error('layer returned no features');
   const props0 = feats.find(f => f.properties)?.properties || {};
@@ -448,7 +448,7 @@ async function routesFromLayer(queryUrl, { note, dropCityAtlanta = false, dropIn
       if (pointInRings(mid, dropInsideRings)) { droppedInside++; continue; }
     }
     seenTypes.set(rawType, (seenTypes.get(rawType) || 0) + 1);
-    const type = classifyFacility(rawType) || 'standard';
+    const type = forceType || classifyFacility(rawType) || 'standard';
     for (const coords of lines) {
       if (coords.length < 2) continue;
       routes.push({
@@ -499,6 +499,19 @@ async function pipelineInfrastructure(outDir, infraUrlOverride) {
   if (!routes.length) throw new Error(
     `city layer produced 0 line features (likely a point layer or wrong field) — ` +
     `pass --infra-url to target the correct polyline layer`);
+
+  // The city's dedicated multi-use trails layer carries newer BeltLine and
+  // greenway segments that the Bicycle Routes layer lags on.
+  console.log('▶ Bike infrastructure — City multi-use trails layer (BeltLine & greenways)');
+  try {
+    const trails = await routesFromLayer(
+      'https://gis.atlantaga.gov/dpcd/rest/services/OpenDataService1/MapServer/32/query',
+      { forceType: 'trail' });
+    console.log(`  ${trails.length} multi-use trail segments merged`);
+    routes.push(...trails);
+  } catch (e) {
+    console.warn(`  ⚠ multi-use trails layer skipped: ${e.message}`);
+  }
 
   // Metro-wide facilities from the ARC Regional Bikeway Inventory (suburbs).
   console.log('▶ Bike infrastructure — ARC Regional Bikeway Inventory (metro/suburbs)');
