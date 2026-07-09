@@ -545,19 +545,36 @@ async function pipelineInfrastructure(outDir, infraUrlOverride) {
     [['routes', routes]]);
 }
 
+const OVERPASS_ENDPOINTS = [
+  'https://overpass-api.de/api/interpreter',
+  'https://overpass.kumi.systems/api/interpreter',
+  'https://overpass.private.coffee/api/interpreter'
+];
+
 async function pipelineShops(outDir) {
   console.log('▶ Bike shops — OpenStreetMap via Overpass API (metro-wide)');
   const query = '[out:json][timeout:90];nwr["shop"="bicycle"](33.40,-84.85,34.20,-84.00);out center tags;';
-  const res = await fetch('https://overpass-api.de/api/interpreter', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/x-www-form-urlencoded',
-      'User-Agent': 'Mozilla/5.0 (compatible; atlanta-cycling-map-pipeline/1.0; +https://github.com/prashallcommit/atlanta-cycling-map)'
-    },
-    body: 'data=' + encodeURIComponent(query)
-  });
-  if (!res.ok) throw new Error(`Overpass HTTP ${res.status}`);
-  const json = await res.json();
+  let json = null, lastErr = null;
+  for (const endpoint of OVERPASS_ENDPOINTS) {
+    try {
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'User-Agent': 'Mozilla/5.0 (compatible; atlanta-cycling-map-pipeline/1.0; +https://github.com/prashallcommit/atlanta-cycling-map)'
+        },
+        body: 'data=' + encodeURIComponent(query)
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      json = await res.json();
+      console.log(`  fetched via ${endpoint}`);
+      break;
+    } catch (e) {
+      lastErr = e;
+      console.log(`  ${endpoint} → ${e.message}`);
+    }
+  }
+  if (!json) throw new Error(`all Overpass endpoints failed (last: ${lastErr?.message})`);
   const shops = [];
   for (const el of json.elements || []) {
     const t = el.tags || {};
@@ -595,9 +612,42 @@ async function pipelineNeighborhoods(outDir) {
     if (!ring) continue;
     neighborhoods.push({ name: nameField ? titleCase(f.properties?.[nameField] ?? '') : '', coords: ring });
   }
+
+  // Metro city limits (suburbs) from ARC/GARC hosted layers. The exact service
+  // name varies; try candidates and log what's found. Atlanta itself is
+  // excluded — the neighborhoods above cover it.
+  console.log('▶ Metro city limits — ARC/GARC (suburbs)');
+  const cities = [];
+  const cityCatalogs = [
+    'https://services.arcgis.com/0L95CJ0VTaxqcmED/arcgis/rest/services/Cities_Georgia/FeatureServer',
+    'https://services.arcgis.com/0L95CJ0VTaxqcmED/arcgis/rest/services/ADMINISTRATIVE_cities/FeatureServer',
+    'https://services.arcgis.com/0L95CJ0VTaxqcmED/arcgis/rest/services/Cities/FeatureServer'
+  ];
+  try {
+    const url = await discoverLayer(cityCatalogs, /city|municipal/i, /point|label/i);
+    if (!url) throw new Error('no city-limits layer found in candidate services');
+    const cf = await fetchArcGISAll(url);
+    const cp0 = cf.find(f => f.properties)?.properties || {};
+    const cName = pickField(cp0, [/^name$/i, /city.*name|name.*city/i, /label/i]);
+    console.log(`  city name field: ${cName ?? '(none)'}`);
+    // metro-ish bbox filter to keep the file lean if the layer is statewide
+    for (const f of cf) {
+      const ring = polyOuterRing(f.geometry, 120);
+      if (!ring) continue;
+      const name = cName ? titleCase(f.properties?.[cName] ?? '') : '';
+      if (/^atlanta$/i.test(name)) continue;
+      const [la, ln] = ring[0];
+      if (la < 33.2 || la > 34.4 || ln < -85.1 || ln > -83.7) continue;
+      cities.push({ name, coords: ring });
+    }
+    console.log(`  ${cities.length} metro city boundaries kept`);
+  } catch (e) {
+    console.warn(`  ⚠ metro city limits skipped: ${e.message}`);
+  }
+
   writeDataFile(outDir, 'neighborhoods.js',
-    'Source: City of Atlanta DPCD GIS — AdministrativeArea/GeopoliticalArea/MapServer/1 (Neighborhood)',
-    [['neighborhoods', neighborhoods]]);
+    'Sources: City of Atlanta DPCD GIS (Neighborhood) + ARC/GARC city limits (metro)',
+    [['neighborhoods', neighborhoods], ['cities', cities]]);
 }
 
 async function pipelineGdotCsv(outDir, csvPath, years, colOverrides, assumeBike) {

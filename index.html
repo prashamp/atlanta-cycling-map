@@ -154,7 +154,8 @@
 
   /* Neighborhood labels */
   .nb-label { background: none; border: none; box-shadow: none; }
-  #map.hide-nb-labels .nb-label { display: none; }
+  #map.hide-nb-labels .nb-label:not(.city-label) { display: none; }
+  .city-label span { font-size: 12px !important; font-weight: 600; color: #4b8994 !important; }
   .nb-label span {
     font-size: 10.5px; color: #7a7f87; letter-spacing: 0.10em; text-transform: uppercase;
     white-space: nowrap; text-shadow: 0 0 3px #fff, 0 0 3px #fff, 0 0 3px #fff;
@@ -231,7 +232,7 @@
 
   <div class="section">
     <h2>Overlays</h2>
-    <label class="toggle"><input type="checkbox" data-layer="neighborhoods" checked><span class="swatch dotted" style="border-color:var(--nb-boundary)"></span>Neighborhood boundaries</label>
+    <label class="toggle"><input type="checkbox" data-layer="neighborhoods" checked><span class="swatch dotted" style="border-color:var(--nb-boundary)"></span>Neighborhood &amp; metro city boundaries</label>
     <label class="toggle"><input type="checkbox" data-layer="marta"><span class="chip">🚇</span>MARTA stations</label>
   </div>
 
@@ -726,6 +727,21 @@ NEIGHBORHOODS.forEach(n => {
   });
   layers.neighborhoods.addLayer(poly);
   layers.neighborhoods.addLayer(label);
+});
+
+// Metro city limits (suburbs) — same toggle, heavier line, labels at all zooms.
+(D.cities || []).forEach(c => {
+  const poly = L.polygon(c.coords, {
+    color: getCss('--nb-boundary'), weight: 2, dashArray: '8 6', opacity: 0.8,
+    fill: true, fillOpacity: 0.015, interactive: false
+  });
+  layers.neighborhoods.addLayer(poly);
+  if (c.name) {
+    layers.neighborhoods.addLayer(L.marker(poly.getBounds().getCenter(), {
+      icon: L.divIcon({ className: 'nb-label city-label', html: `<span>${esc(c.name)}</span>`, iconSize: null }),
+      interactive: false, keyboard: false
+    }));
+  }
 });
 
 /* ---------- POIs ---------- */
