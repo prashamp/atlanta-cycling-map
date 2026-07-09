@@ -18,7 +18,7 @@ on:
   workflow_dispatch:
     inputs:
       fars:
-        description: 'Also fetch NHTSA FARS fatal-crash data (fatalities only)'
+        description: 'Also fetch NHTSA FARS fatal-crash data (fatalities only). NOTE: NHTSA currently 403-blocks GitHub runner IPs, so this typically fails here — run `node scripts/fetch-data.mjs --fars` locally instead and commit data/safety.js.'
         type: boolean
         default: false
 

@@ -67,7 +67,7 @@ Delete the files to fall back to samples. Run `node scripts/fetch-data.mjs
 | Bike infrastructure | City of Atlanta DPCD GIS — [Bicycle Routes layer](https://gis.atlantaga.gov/dpcd/rest/services/OpenDataService/FeatureServer/30) (true road geometries with facility type: protected / buffered / lane / path / sharrow) | automatic |
 | Neighborhoods | City of Atlanta DPCD GIS — [official Neighborhood boundaries](https://gis.atlantaga.gov/dpcd/rest/services/AdministrativeArea/GeopoliticalArea/MapServer/1) (~240 polygons; labels appear from zoom 13) | automatic |
 | Crashes (best) | [GDOT Crash Data Portal](https://gdot.numetric.net/) — free account required. Filter: *bicyclist or e-scooter involved*, *City of Atlanta*, your year range → export CSV → `--gdot-csv`. Column names are auto-detected; override with `--map "lat=...,lng=...,year=...,mode=...,severity=...,street=..."`. If your export is pre-filtered to bikes and has no person-type column, add `--assume-bike`. | manual export |
-| Crashes (supplement) | [NHTSA FARS CrashAPI](https://crashviewer.nhtsa.dot.gov/CrashAPI) via `--fars` — **fatalities only**, public API, no account. Useful preview; not a substitute for the GDOT export. | automatic |
+| Crashes (supplement) | [NHTSA FARS CrashAPI](https://crashviewer.nhtsa.dot.gov/CrashAPI) via `--fars` — **fatalities only**, public API, no account. Run it **locally** (NHTSA 403-blocks GitHub Actions runner IPs, so the workflow's `fars` input usually fails); commit the generated `data/safety.js`. Not a substitute for the GDOT export. | local run |
 
 Atlanta Police Department crash records are not published as a machine-readable
 open dataset; GDOT's portal is the canonical source for all-severity crash data
