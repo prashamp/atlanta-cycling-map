@@ -269,17 +269,23 @@ export function aggregateSafety(rows, col, years, { assumeBike = false, source =
     c.lat += p.lat; c.lng += p.lng; c.n++;
     if (p.street) c.streets.set(p.street, (c.streets.get(p.street) || 0) + 1);
   }
-  const crashes = [...cells.values()]
-    .sort((a, b) => b.n - a.n)
-    .slice(0, 400)
-    .map(c => {
-      const street = [...c.streets.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
-      return {
-        lat: round5(c.lat / c.n), lng: round5(c.lng / c.n), n: c.n, mode: c.mode,
-        sev: c.n >= 8 ? 'high' : c.n >= 4 ? 'med' : 'low',
-        label: street || 'Crash cluster'
-      };
-    });
+  const kept = [...cells.values()].sort((a, b) => b.n - a.n).slice(0, 400);
+  // Data-driven risk grades: thresholds from the actual cluster-size
+  // distribution (roughly top ~7% high, next ~23% medium), with floors so a
+  // 1-crash spot is never "high". Absolute cutoffs fail when most clusters
+  // are small — everything ends up one color.
+  const ns = kept.map(c => c.n).sort((a, b) => a - b);
+  const q = p => ns[Math.min(ns.length - 1, Math.floor(p * ns.length))];
+  const hiCut = Math.max(3, q(0.93)), medCut = Math.max(2, Math.min(q(0.70), hiCut - 1));
+  console.log(`  risk grade cutoffs: high >= ${hiCut}, medium >= ${medCut} crashes per cluster`);
+  const crashes = kept.map(c => {
+    const street = [...c.streets.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
+    return {
+      lat: round5(c.lat / c.n), lng: round5(c.lng / c.n), n: c.n, mode: c.mode,
+      sev: c.n >= hiCut ? 'high' : c.n >= medCut ? 'med' : 'low',
+      label: street || 'Crash cluster'
+    };
+  });
 
   // corridors: top 5 streets by crash count, polyline through their points
   const byStreet = new Map();

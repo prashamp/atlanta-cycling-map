@@ -3,7 +3,12 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Atlanta Cycling Map</title>
+<title>Atlanta Cycling Map — bike lanes, trails & safety across metro Atlanta</title>
+<meta name="description" content="Interactive map of every bike lane, trail, and sharrow across metro Atlanta — BeltLine and PATH trails, protected lanes, bike shops, MARTA connections, and real crash-safety data from GDOT/APD records.">
+<meta property="og:title" content="Atlanta Cycling Map">
+<meta property="og:description" content="Every bike lane and trail across metro Atlanta, with real crash-safety data. Built from official City of Atlanta and ARC GIS sources.">
+<meta property="og:type" content="website">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🚲</text></svg>">
 <link rel="stylesheet" href="vendor/leaflet/leaflet.css">
 <style>
   :root {
@@ -93,6 +98,9 @@
   }
   .divider { border: 0; border-top: 1px solid var(--gridline); margin: 12px 0; }
   #dataStamp { font-size: 10.5px; color: var(--text-muted); margin-top: 8px; text-align: center; }
+  #aboutLinks { font-size: 11px; color: var(--text-muted); margin-top: 6px; text-align: center; }
+  #aboutLinks a { color: var(--series-1); text-decoration: none; }
+  #aboutLinks a:hover { text-decoration: underline; }
 
   /* ---------- Map ---------- */
   #map { flex: 1; height: 100%; }
@@ -207,8 +215,9 @@
 
   <div id="themeSwitch" aria-label="Color theme">
     <span>Colors:</span>
-    <button id="themeClassic" class="active">Classic</button>
-    <button id="themeAtl" title="Braves navy · Hawks red &amp; volt · United gold">ATL Teams</button>
+    <button data-theme="classic" class="active">Classic</button>
+    <button data-theme="braves" title="Navy, scarlet &amp; metallic gold">Braves</button>
+    <button data-theme="hawks" title="Torch red, volt green &amp; charcoal">Hawks</button>
   </div>
 
   <div class="section">
@@ -257,6 +266,11 @@
 
   <div class="disclaimer" id="dataDisclaimer"></div>
   <div id="dataStamp"></div>
+  <div id="aboutLinks">
+    <a href="https://github.com/prashallcommit/atlanta-cycling-map#readme" target="_blank" rel="noopener">About this map &amp; data sources</a>
+    ·
+    <a href="https://github.com/prashallcommit/atlanta-cycling-map/issues" target="_blank" rel="noopener">Report an issue</a>
+  </div>
 </aside>
 
 <div id="map">
@@ -623,12 +637,12 @@ const LANE_STYLE = {
   standard:  { weight: 2.5, opacity: 0.9 },
   sharrow:   { weight: 2.5, opacity: 0.9, dashArray: '9 6' }
 };
-// Color themes: Classic (accessible default) and ATL Teams
-// (Braves navy trails, Hawks volt protected, United gold buffered,
-// Hawks red standard, Falcons gray sharrows).
+// Color themes: Classic (accessible default) plus team palettes built from
+// each club's official colors (+ tints where a team has fewer than 5 colors).
 const THEMES = {
   classic: { trail: '#7b3fbf', protected: '#1a9850', buffered: '#2a78d6', standard: '#e8730c', sharrow: '#5b6470' },
-  atl:     { trail: '#13274F', protected: '#8CA309', buffered: '#B49759', standard: '#E03A3E', sharrow: '#53565A' }
+  braves:  { trail: '#13274F', protected: '#4A77BE', buffered: '#B5985A', standard: '#CE1141', sharrow: '#5b6470' },
+  hawks:   { trail: '#26282A', protected: '#8CA309', buffered: '#8E9AA3', standard: '#E03A3E', sharrow: '#5b6470' }
 };
 const LANE_COLOR = Object.assign({}, THEMES.classic);
 const ROUTE_LINES = [];   // { line, type } — restyled on theme switch
@@ -668,7 +682,6 @@ ROUTES.forEach(r => {
       ${r.hills ? `<span class="k">${HILL_ICON[r.hills] || '⛰️'}</span><span><b>Hilliness:</b> ${esc(r.hills)}</span>` : ''}
       ${r.lighting ? `<span class="k">🌙</span><span><b>Lighting:</b> ${esc(r.lighting)}</span>` : ''}
       ${marta ? `<span class="k">🚇</span><span><b>MARTA:</b> ${marta}</span>` : ''}
-      <span class="k">🚧</span><span><b>Construction/closures:</b> ${esc(r.closures || '—')}</span>
     </div>
     ${r.note ? `<div class="popup-note">${esc(r.note)}</div>` : ''}`;
   hit.bindPopup(popup, { maxWidth: 290 });
@@ -680,6 +693,7 @@ ROUTES.forEach(r => {
 });
 
 /* ---------- Color theme switch ---------- */
+const themeButtons = document.querySelectorAll('#themeSwitch button');
 function setTheme(name) {
   const pal = THEMES[name];
   Object.keys(pal).forEach(t => {
@@ -687,11 +701,9 @@ function setTheme(name) {
     document.documentElement.style.setProperty('--lane-' + t, pal[t]); // sidebar + legend swatches
   });
   ROUTE_LINES.forEach(({ line, type }) => line.setStyle({ color: pal[type] }));
-  document.getElementById('themeClassic').classList.toggle('active', name === 'classic');
-  document.getElementById('themeAtl').classList.toggle('active', name === 'atl');
+  themeButtons.forEach(b => b.classList.toggle('active', b.dataset.theme === name));
 }
-document.getElementById('themeClassic').addEventListener('click', () => setTheme('classic'));
-document.getElementById('themeAtl').addEventListener('click', () => setTheme('atl'));
+themeButtons.forEach(b => b.addEventListener('click', () => setTheme(b.dataset.theme)));
 
 /* ---------- Neighborhoods ---------- */
 // With the full official layer (~240 polygons) labels clutter low zooms —
@@ -729,7 +741,13 @@ Object.keys(POI_EMOJI).forEach(cat => {
       title: p.name
     });
     const tel = p.phone ? String(p.phone).replace(/[^0-9+]/g, '') : null;
-    const gmaps = `https://www.google.com/maps/search/?api=1&query=${p.lat}%2C${p.lng}`;
+    // Search by NAME (+ street address when we have one) so Google resolves the
+    // actual business listing rather than dropping a bare coordinate pin.
+    const hasAddr = cat === 'shops' && p.desc && /\d/.test(p.desc);
+    const gq = cat === 'marta'
+      ? `${p.name} MARTA Station, Atlanta GA`
+      : `${p.name}, ${hasAddr ? p.desc + ', ' : ''}Atlanta GA`;
+    const gmaps = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(gq)}`;
     m.bindPopup(`
       <h4>${POI_EMOJI[cat]} ${esc(p.name)}</h4>
       <div>${p.desc ? esc(p.desc) : (cat === 'marta' ? 'MARTA rail station — bikes allowed on all trains.' : '')}</div>

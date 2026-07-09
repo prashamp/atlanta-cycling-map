@@ -59,17 +59,18 @@ and the map notes what's missing rather than breaking.
 | Neighborhoods | ✅ Official city boundaries, auto-refreshed |
 | Crash data | ✅ Real GDOT/APD export (2021–2025), committed in `data/` |
 | Bike shops | ✅ OpenStreetMap, auto-refreshed |
-| Lighting / hilliness | ❌ No official source publishes these — shown only on the few hand-annotated sample routes, omitted elsewhere |
-| Construction/closures | Placeholder field for manual updates |
+| Lighting / hilliness | ❌ No official source publishes these — omitted rather than guessed |
 
 Notes: FARS (NHTSA) fatal-crash fetching exists (`--fars`) but NHTSA blocks
 GitHub's runner IPs, so run it locally if wanted. Relay Bike Share shut down
 in 2020; dockless e-bikes/scooters are the current shared option.
 
-## Updating the crash data
+## Refreshing crash data in future years (optional)
 
+The map already carries a **real 2021–2025 GDOT/APD export** — nothing to do
+today. When newer years become available and you want them included:
 GDOT's portal (free account at https://gdot.numetric.net/) → filter to
-bicyclist/e-scooter crashes in Atlanta → export CSV → then:
+bicyclist crashes in Atlanta → export CSV → then:
 
 ```bash
 node scripts/fetch-data.mjs --gdot-csv your-export.csv --years 2021-2025 \
@@ -81,6 +82,15 @@ git add data/ && git commit -m "Update crash data" && git push
 Column names auto-detect; `--map` overrides them, `--assume-bike` covers
 exports pre-filtered to bikes. `node scripts/fetch-data.mjs --selftest` runs
 the offline test suite (40+ checks). `--help` lists everything.
+
+## Hosting / custom domain
+
+The site is fully static, so hosting is free on GitHub Pages (current setup).
+To publish it as an independent website: buy a domain (~$10/yr at Cloudflare,
+Porkbun, or Namecheap), point a CNAME record at
+`prashallcommit.github.io`, add the domain in **Settings → Pages → Custom
+domain**, and commit the generated `CNAME` file. HTTPS is automatic. Netlify
+and Cloudflare Pages free tiers work identically if preferred.
 
 ## Stack
 
