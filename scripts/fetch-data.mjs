@@ -752,14 +752,17 @@ async function pipelineNeighborhoods(outDir) {
   // excluded — the neighborhoods above cover it.
   console.log('▶ Metro city limits — ARC/GARC (suburbs)');
   const cities = [];
-  const cityCatalogs = [
-    'https://services.arcgis.com/0L95CJ0VTaxqcmED/arcgis/rest/services/Cities_Georgia/FeatureServer',
-    'https://services.arcgis.com/0L95CJ0VTaxqcmED/arcgis/rest/services/ADMINISTRATIVE_cities/FeatureServer',
-    'https://services.arcgis.com/0L95CJ0VTaxqcmED/arcgis/rest/services/Cities/FeatureServer'
-  ];
   try {
-    const url = await discoverLayer(cityCatalogs, /city|municipal/i, /point|label/i);
-    if (!url) throw new Error('no city-limits layer found in candidate services');
+    // Don't guess service names: list the GARC org's services directory and
+    // take every service whose name looks like city boundaries.
+    const orgRoot = 'https://services.arcgis.com/0L95CJ0VTaxqcmED/arcgis/rest/services';
+    const dir = await getJSON(`${orgRoot}?f=json`);
+    const candidates = (dir.services || [])
+      .filter(s => /cit(y|ies)/i.test(s.name) && !/facilit|transport/i.test(s.name))
+      .map(s => `${orgRoot}/${s.name.split('/').pop()}/FeatureServer`);
+    console.log(`  org directory: ${(dir.services || []).length} services; city candidates: ${candidates.map(c => c.split('/services/')[1]).join(', ') || '(none)'}`);
+    const url = await discoverLayer(candidates, /city|municipal/i, /point|label|annex/i);
+    if (!url) throw new Error('no city-limits layer found in org directory');
     const cf = await fetchArcGISAll(url);
     const cp0 = cf.find(f => f.properties)?.properties || {};
     const cName = pickField(cp0, [/^name$/i, /city.*name|name.*city/i, /label/i]);
